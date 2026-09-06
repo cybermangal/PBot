@@ -1,0 +1,72 @@
+name: Release portable package
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Validate and publish release
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate source
+        run: |
+          npm run check
+          npm test
+
+      - name: Confirm tag matches package version
+        shell: pwsh
+        run: |
+          $packageVersion = node -p "require('./package.json').version"
+          if ($env:TAG -ne "v$packageVersion") {
+            throw "Tag $env:TAG does not match package.json version $packageVersion."
+          }
+
+      - name: Build clean portable ZIP
+        id: package
+        shell: pwsh
+        run: |
+          $packageName = "PBot-$env:TAG"
+          $staging = Join-Path $env:RUNNER_TEMP $packageName
+          $zipPath = Join-Path $env:RUNNER_TEMP "$packageName.zip"
+
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item -LiteralPath 'package.json', 'package-lock.json', 'README.md', 'RUN-FIRST.txt', 'LICENSE', '01-install-requirements.bat', 'start-ui.bat' -Destination $staging
+          Copy-Item -LiteralPath 'scripts', 'ui' -Destination $staging -Recurse
+          $packagedTests = Join-Path $staging 'scripts\tests'
+          if (Test-Path -LiteralPath $packagedTests) {
+            Remove-Item -LiteralPath $packagedTests -Recurse -Force
+          }
+          if (Get-ChildItem -LiteralPath $staging -Recurse -File -Filter '*.test.js') {
+            throw 'Portable package unexpectedly contains test files.'
+          }
+          Set-Content -LiteralPath (Join-Path $staging 'VERSION') -Value $env:TAG -NoNewline
+
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -CompressionLevel Optimal
+
+          "zip=$zipPath" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub release
+        shell: pwsh
+        run: |
+          gh release create $env:TAG "${{ steps.package.outputs.zip }}" --title "PBot 1.00" --notes "версия 1.00"

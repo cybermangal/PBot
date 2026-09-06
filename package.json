@@ -1,0 +1,73 @@
+{
+  "name": "pbot",
+  "version": "1.0.0",
+  "description": "Локальный бот для игры «Тюряга»",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "setup": "npm ci && npm run check",
+    "check": "node --check scripts/lib/pbot.js && node --check scripts/lib/bundle-intel.js && node --check scripts/lib/logger.js && node --check scripts/lib/api-client.js && node --check scripts/lib/automation-state.js && node --check scripts/lib/pro-prison-features.js && node --check scripts/lib/zaruba-planner.js && node --check scripts/lib/boss-keys.js && node --check scripts/lib/boss-catalog.js && node --check scripts/lib/boss-runner.js && node --check scripts/lib/boss-actions.js && node --check scripts/lib/prison-runner.js && node --check scripts/lib/prison-dashboard.js && node --check scripts/lib/loot-containers.js && node --check scripts/lib/lets-cook.js && node --check scripts/lib/id-collector.js && node --check scripts/lib/friends-maintenance.js && node --check scripts/lib/damage-history.js && node --check scripts/lib/supporters-directory.js && node --check scripts/lib/ui-service.js && node --check scripts/api-cli.js && node --check scripts/ui-server.js && node --check ui/damage-calculator.js && node --check ui/app.js && node --check scripts/lib/daily-toilet-paper.js && node --check scripts/lib/monthly-purchase.js && node --check scripts/lib/quest-policy.js",
+    "test": "node --test scripts/tests/*.test.js",
+    "ui": "node scripts/ui-server.js",
+    "ui:no-open": "node scripts/ui-server.js --no-open",
+    "ui:auto": "node scripts/ui-server.js",
+    "ui:auto:no-open": "node scripts/ui-server.js --no-open",
+    "api": "node scripts/api-cli.js",
+    "ids:collect": "node scripts/api-cli.js ids:collect",
+    "friends:add": "node scripts/api-cli.js friends:add",
+    "friends:add-collected": "node scripts/api-cli.js friends:add-collected",
+    "friends:remove": "node scripts/api-cli.js friends:remove",
+    "friends:accept-requests": "node scripts/api-cli.js friends:accept-requests",
+    "friends:clean": "node scripts/api-cli.js friends:clean",
+    "player:view": "node scripts/api-cli.js player:view",
+    "interaction:perform": "node scripts/api-cli.js interaction:perform",
+    "bosses:list": "node scripts/api-cli.js bosses:list",
+    "bosses:arrivals": "node scripts/api-cli.js bosses:arrivals",
+    "bosses:catalog": "node scripts/api-cli.js bosses:catalog",
+    "bosses:limits": "node scripts/api-cli.js bosses:limits",
+    "bosses:active-session": "node scripts/api-cli.js bosses:active-session",
+    "bosses:actions": "node scripts/api-cli.js bosses:actions",
+    "bosses:slots": "node scripts/api-cli.js bosses:slots",
+    "bosses:queue": "node scripts/api-cli.js bosses:queue",
+    "bosses:runner-start": "node scripts/api-cli.js bosses:runner-start",
+    "bosses:runner-hit": "node scripts/api-cli.js bosses:runner-hit",
+    "bosses:runner-loop": "node scripts/api-cli.js bosses:runner-loop",
+    "bosses:hit": "node scripts/api-cli.js bosses:hit",
+    "bosses:hit-seq": "node scripts/api-cli.js bosses:hit-seq",
+    "bosses:check-session": "node scripts/api-cli.js bosses:check-session",
+    "bosses:start-attack": "node scripts/api-cli.js bosses:start-attack",
+    "bosses:use-weapon": "node scripts/api-cli.js bosses:use-weapon",
+    "bosses:save-slots": "node scripts/api-cli.js bosses:save-slots",
+    "bosses:raw": "node scripts/api-cli.js bosses:raw",
+    "prison:checkpoints": "node scripts/api-cli.js prison:checkpoints",
+    "prison:detail": "node scripts/api-cli.js prison:detail",
+    "prison:work": "node scripts/api-cli.js prison:work",
+    "prison:runner-once": "node scripts/api-cli.js prison:runner-once",
+    "interaction:batch": "node scripts/api-cli.js interaction:batch",
+    "interaction:batch-collected": "node scripts/api-cli.js interaction:batch-collected",
+    "bosses:snapshot": "node scripts/api-cli.js bosses:snapshot",
+    "prison:status": "node scripts/api-cli.js prison:status",
+    "mobile:collect": "node scripts/api-cli.js mobile:collect",
+    "mobile:escape-collect": "node scripts/api-cli.js mobile:escape-collect",
+    "damage:snapshot": "node scripts/api-cli.js damage:snapshot",
+    "damage:report": "node scripts/api-cli.js damage:report"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cybermangal/PBot.git"
+  },
+  "homepage": "https://github.com/cybermangal/PBot#readme",
+  "bugs": {
+    "url": "https://github.com/cybermangal/PBot/issues"
+  },
+  "keywords": [
+    "pbot",
+    "tyuryaga",
+    "telegram-mini-app"
+  ],
+  "author": "PBot",
+  "license": "ISC"
+}

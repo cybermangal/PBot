@@ -1,0 +1,42 @@
+PBot 1.0.0 — portable InitData package
+======================================
+
+This folder intentionally does not include:
+- node_modules
+- artifacts/session-latest.json
+- saved tokens or InitData
+
+First run
+---------
+
+1. Run 01-install-requirements.bat to install all requirements.
+
+2. Run start-ui.bat.
+   The local UI opens at http://127.0.0.1:4311.
+
+3. If no active session is saved, paste InitData and click "Войти по InitData".
+   A valid saved InitData is reused automatically on later starts.
+
+Where data is saved
+-------------------
+
+After a successful login, the package creates:
+   artifacts/session-latest.json
+   artifacts/auth-accounts.json
+
+These files contain private auth data for game accounts. Do not share them.
+
+Account switching
+-----------------
+
+In the full UI open System -> Account and authorization, select a saved account
+and click "Переключиться". Previously used accounts are found automatically from
+local session snapshots, so their InitData does not need to be entered again.
+Use the InitData field only to add a new account or refresh an expired InitData.
+
+Notes
+-----
+
+- Pbot never opens or redirects to Telegram.
+- No browser engine is installed with this package.
+- The game API domain is https://oldprison-prod.luckygem.online by default.

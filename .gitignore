@@ -1,0 +1,17 @@
+node_modules/
+.state/
+artifacts/
+logs/
+release/
+04042026_backup/
+Android-dist/
+.agents/
+.codex/
+temp_api_urls.txt
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.log

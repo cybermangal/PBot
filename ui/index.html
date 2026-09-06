@@ -1,0 +1,2034 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#090a0b">
+    <title>Управление Pbot</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/pbot-favicon.svg">
+    <link rel="stylesheet" href="/styles.css?v=20260906-zaruba-spending">
+  </head>
+  <body class="app-loading">
+    <div
+      id="initial-loader"
+      class="initial-loader"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <div class="initial-loader-card">
+        <div class="initial-loader-spinner" aria-hidden="true">
+          <span></span>
+        </div>
+        <div class="initial-loader-copy">
+          <p class="initial-loader-kicker">Pbot</p>
+          <h1 id="initial-loader-title">Загружаем панель</h1>
+          <p id="initial-loader-status">Подготавливаем интерфейс…</p>
+        </div>
+        <div
+          id="initial-loader-progress"
+          class="initial-loader-progress"
+          role="progressbar"
+          aria-label="Прогресс загрузки"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+        >
+          <span id="initial-loader-progress-bar"></span>
+        </div>
+        <p id="initial-loader-detail" class="initial-loader-detail">Это займёт несколько секунд.</p>
+        <button id="initial-loader-retry" class="action-button" type="button" hidden>Повторить</button>
+      </div>
+    </div>
+
+    <section
+      id="auth-gate"
+      class="auth-gate"
+      aria-labelledby="auth-gate-title"
+      aria-hidden="true"
+      hidden
+    >
+      <div class="auth-gate-card">
+        <header class="auth-gate-head">
+          <div>
+            <p class="initial-loader-kicker">Pbot</p>
+            <h1 id="auth-gate-title">Вход в Pbot</h1>
+            <p id="auth-gate-subtitle">Войди по InitData или токенам игрового аккаунта.</p>
+          </div>
+          <details class="auth-gate-help">
+            <summary aria-label="Как получить InitData">
+              <span aria-hidden="true">?</span>
+            </summary>
+            <div class="auth-gate-help-body">
+              <strong>Как получить InitData</strong>
+              <ol>
+                <li>Открой Telegram Web в браузере и вызови DevTools клавишей F12.</li>
+                <li>Перейди во вкладку Network, открой игру и введи <code>login</code> в строке поиска.</li>
+                <li>Открой найденный запрос, перейди в Payload и скопируй значение поля <code>initData</code> целиком.</li>
+                <li>Если запроса нет, можно скопировать <code>accessToken</code> и <code>refreshToken</code> из Application → Storage → Local Storage и войти по ним во вкладке «По токенам».</li>
+              </ol>
+              <p><a href="https://youtu.be/_6xYERiqVY4" target="_blank" rel="noopener noreferrer">Видеоинструкция по получению InitData</a></p>
+            </div>
+          </details>
+        </header>
+
+        <div class="auth-gate-form">
+          <label class="field field-wide">
+            <span>Сохранённый аккаунт</span>
+            <select id="auth-gate-account-select" aria-describedby="auth-gate-accounts-note"></select>
+          </label>
+          <div class="button-row auth-gate-actions">
+            <button id="auth-gate-switch-saved-btn" class="action-button action-button-alt" type="button">Переключиться</button>
+          </div>
+          <p id="auth-gate-accounts-note" class="inline-note auth-gate-note">Ищем сохранённые аккаунты…</p>
+        </div>
+
+        <div class="auth-methods" data-auth-methods>
+          <div class="auth-method-tabs" role="tablist" aria-label="Способ входа">
+            <button id="auth-gate-initdata-tab" class="auth-method-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-gate-initdata-panel" tabindex="0">По InitData</button>
+            <button id="auth-gate-tokens-tab" class="auth-method-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-gate-tokens-panel" tabindex="-1">По токенам</button>
+          </div>
+          <div id="auth-gate-initdata-panel" class="auth-method-panel" role="tabpanel" aria-labelledby="auth-gate-initdata-tab">
+            <div class="auth-gate-form">
+              <label class="field field-wide">
+                <span>InitData</span>
+                <textarea id="auth-gate-initdata" rows="5" placeholder="query_id=...&user=...&auth_date=...&hash=..."></textarea>
+              </label>
+            </div>
+
+            <div class="button-row auth-gate-actions">
+              <button id="auth-gate-login-btn" class="action-button" type="button">Войти по InitData</button>
+              <button id="auth-gate-status-btn" class="action-button action-button-ghost" type="button">Проверить</button>
+            </div>
+          </div>
+          <div id="auth-gate-tokens-panel" class="auth-method-panel" role="tabpanel" aria-labelledby="auth-gate-tokens-tab" hidden>
+            <div class="auth-gate-form">
+              <label class="field field-wide">
+                <span>Access token</span>
+                <input id="auth-gate-access-token" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь accessToken">
+              </label>
+              <label class="field field-wide">
+                <span>Refresh token <small>(необязательно)</small></span>
+                <input id="auth-gate-refresh-token" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь refreshToken для автообновления">
+              </label>
+            </div>
+
+            <div class="button-row auth-gate-actions">
+              <button id="auth-gate-token-login-btn" class="action-button action-button-alt" type="button">Войти по токенам</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="auth-gate-summary" class="stats-grid auth-gate-summary"></div>
+        <p id="auth-gate-status-note" class="inline-note auth-gate-note">Ожидаем данные для входа.</p>
+      </div>
+    </section>
+
+    <div class="app-shell" inert aria-hidden="true">
+      <header class="hero is-data-loading" data-trend-window="day">
+        <div class="hero-main">
+          <button
+            id="menu-toggle"
+            class="menu-toggle"
+            type="button"
+            aria-label="Открыть меню"
+            aria-controls="main-menu"
+            aria-expanded="false"
+          >
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+            <span aria-hidden="true"></span>
+            <span class="menu-toggle-label">Меню</span>
+          </button>
+          <div class="brand-lockup">
+            <p class="eyebrow">Pbot</p>
+            <h1>Панель управления</h1>
+          </div>
+          <div class="hero-meta">
+            <span class="hero-meta-item server-status-item">
+              <span class="server-indicator" tabindex="0" aria-describedby="account-id-tooltip">
+                <span class="server-dot" aria-hidden="true"></span>
+                <span id="account-id-tooltip" class="account-id-tooltip" role="tooltip">
+                  ID игрока: <span id="self-user-id">—</span>
+                </span>
+              </span>
+              <strong id="server-status" data-tone="busy">Подключение</strong>
+              <small id="server-activity">Запуск…</small>
+            </span>
+          </div>
+        </div>
+
+        <div class="hero-status">
+          <div id="dashboard-hero-slots" class="dashboard-hero-slots" aria-label="Настраиваемые показатели шапки"></div>
+          <div id="header-vpi" class="status-chip status-chip-resource status-chip-vpi" data-active="false">
+            <img
+              id="header-vpi-icon"
+              class="status-resource-icon status-vpi-icon"
+              src="https://oldprison-prod-assets-cdn-yandex.luckygem.online/assets/VIP/P_StashV2.webp"
+              alt=""
+            >
+            <span>
+              <span class="status-label">Общак</span>
+              <span id="header-vpi-status" class="status-value">Проверяем…</span>
+              <span id="header-vpi-meta" class="status-sub">Ежедневные бонусы</span>
+              <span id="header-vpi-damage" class="resource-trend">Игла —</span>
+            </span>
+          </div>
+        </div>
+
+        <section class="status-chip status-chip-wide status-chip-wallet hero-wallet" aria-label="Ресурсы аккаунта">
+            <div class="wallet-heading">
+              <div>
+                <span class="status-label">Ресурсы</span>
+                <span id="wallet-updated" class="status-sub">Загрузка балансов…</span>
+              </div>
+              <div class="trend-switch" role="group" aria-label="Период изменения ресурсов">
+                <button class="trend-switch-button is-active" type="button" data-trend-window-button="day" aria-pressed="true">Сутки</button>
+                <button class="trend-switch-button" type="button" data-trend-window-button="week" aria-pressed="false">Неделя</button>
+              </div>
+            </div>
+            <div id="currency-all" class="currency-grid"></div>
+            <details id="dashboard-resource-details" class="wallet-details dashboard-resource-details">
+              <summary>
+                <span>Настроить шапку</span>
+                <span id="dashboard-slot-count" class="dashboard-slot-count">9 / 9</span>
+              </summary>
+              <div class="dashboard-customizer">
+                <div class="dashboard-customizer-head">
+                  <div>
+                    <strong>Ресурсы и метрики</strong>
+                    <p>Каждая плашка показывает один ресурс или метрику. Перетащите показатель в нужный плейсхолдер, чтобы заполнить или заменить его.</p>
+                  </div>
+                  <div class="dashboard-customizer-actions">
+                    <button id="dashboard-reset" class="action-button action-button-ghost" type="button">Вернуть 9</button>
+                    <button id="dashboard-clear" class="action-button action-button-ghost" type="button">Убрать всё</button>
+                  </div>
+                </div>
+                <p id="dashboard-customizer-status" class="dashboard-customizer-status" aria-live="polite"></p>
+                <div id="dashboard-resource-catalog" class="dashboard-resource-catalog"></div>
+              </div>
+            </details>
+        </section>
+      </header>
+
+      <div id="menu-backdrop" class="menu-backdrop" aria-hidden="true"></div>
+      <nav id="main-menu" class="tabbar" aria-label="Основные разделы" aria-hidden="true">
+        <div class="drawer-head">
+          <div>
+            <span class="drawer-kicker">Навигация</span>
+            <strong>Разделы Pbot</strong>
+          </div>
+          <button id="menu-close" class="menu-close" type="button" aria-label="Закрыть меню">×</button>
+        </div>
+        <button class="tab-button is-active" data-tab="bosses"><span class="tab-icon" aria-hidden="true">♛</span><span>Боссы</span></button>
+        <button class="tab-button" data-tab="prison"><span class="tab-icon" aria-hidden="true">▦</span><span>Тюрьма</span></button>
+        <button class="tab-button" data-tab="zaruba"><span class="tab-icon" aria-hidden="true">⚔</span><span>Зарубы</span></button>
+        <div id="friends-tab-dropdown" class="tab-dropdown">
+          <button
+            id="friends-tab-trigger"
+            class="tab-button tab-dropdown-trigger"
+            type="button"
+            data-tab="friends"
+          >
+            <span class="tab-icon" aria-hidden="true">●</span>
+            <span id="friends-tab-label" class="tab-dropdown-label">Друзья</span>
+          </button>
+          <button
+            id="friends-tab-toggle"
+            class="tab-dropdown-toggle"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="friends-section-menu"
+            aria-label="Открыть список разделов вкладки «Друзья»"
+          >
+            <span class="tab-dropdown-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="friends-section-menu" class="tab-dropdown-menu" role="menu" aria-label="Разделы вкладки «Друзья»" hidden>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-friends-section="damage">Статистика урона</button>
+            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-friends-section="friends" aria-current="page">Друзья</button>
+          </div>
+        </div>
+        <div id="misc-tab-dropdown" class="tab-dropdown">
+          <button
+            id="misc-tab-trigger"
+            class="tab-button tab-dropdown-trigger"
+            type="button"
+            data-tab="misc"
+          >
+            <span class="tab-icon" aria-hidden="true">✦</span>
+            <span id="misc-tab-label" class="tab-dropdown-label">Делюги</span>
+          </button>
+          <button
+            id="misc-tab-toggle"
+            class="tab-dropdown-toggle"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="misc-section-menu"
+            aria-label="Открыть список разделов вкладки «Делюги»"
+          >
+            <span class="tab-dropdown-chevron" aria-hidden="true"></span>
+          </button>
+          <div id="misc-section-menu" class="tab-dropdown-menu" role="menu" aria-label="Разделы вкладки «Разное»" hidden>
+            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-misc-section="deals" aria-current="page">Делюги</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="stashes">Нычки</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="bags">Сумки</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="events">События</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="containers">Посылки и баулы</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="collection">Коллекция вещей</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="games">Азартные активности</button>
+          </div>
+        </div>
+        <button class="tab-button" data-tab="system"><span class="tab-icon" aria-hidden="true">⚙</span><span>Система</span></button>
+        <button class="tab-button tab-button-about" data-tab="about"><span class="tab-icon" aria-hidden="true">ⓘ</span><span>О боте</span></button>
+      </nav>
+
+      <main class="workspace">
+        <section class="tab-panel is-active" data-panel="bosses">
+          <div class="panel-grid panel-grid-bosses">
+            <section class="card boss-status-card full-span">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">СЕЙЧАС</p>
+                  <h2>Активный бой</h2>
+                  <p class="card-subtitle">Здоровье босса, ваш урон и готовое оружие — в одном месте.</p>
+                </div>
+                <div class="card-head-actions">
+                  <button
+                    id="boss-attack-plan-open-btn"
+                    class="boss-attack-plan-open-button"
+                    type="button"
+                    aria-haspopup="dialog"
+                    aria-controls="boss-attack-plan-dialog"
+                    aria-expanded="false"
+                    title="Открыть очередь ударов"
+                  >
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path d="M3 4.25h10M3 8h7M3 11.75h4"></path>
+                      <path d="m10.5 10.25 2.5 1.5-2.5 1.5z"></path>
+                    </svg>
+                    <span>Очередь ударов</span>
+                    <span id="boss-attack-plan-count" class="boss-attack-plan-count" hidden>0</span>
+                  </button>
+                  <button
+                    id="boss-surrender-btn"
+                    class="text-button text-button-danger boss-surrender-button"
+                    type="button"
+                    hidden
+                    disabled
+                  >Выйти из боя · 2 мыла</button>
+                  <button id="boss-vorkuta-box-btn" class="text-button" type="button" title="Открыть один ящик Воркуты">Ящик Воркуты</button>
+                  <button id="boss-refresh-btn" class="text-button" type="button">Обновить</button>
+                  <button id="boss-state-btn" type="button" hidden>Обновить состояние</button>
+                </div>
+              </div>
+
+              <div class="boss-fight-layout">
+                <div class="boss-fight-primary">
+                  <div class="boss-fight-overview">
+                    <div id="boss-active-avatar" class="boss-active-avatar" hidden></div>
+                    <div id="boss-fight-bars" class="fight-bars"></div>
+                  </div>
+                  <div id="boss-summary" class="stats-grid stats-grid-tight"></div>
+                  <div id="boss-live-summary" class="stats-grid stats-grid-tight"></div>
+                </div>
+                <div class="boss-weapon-panel">
+                  <div class="boss-weapon-panel-head">
+                    <span>Удары и оружие</span>
+                    <span class="boss-weapon-panel-head-tools">
+                      <span>урон / запас</span>
+                      <button
+                        id="damage-calculator-open-btn"
+                        class="damage-calculator-open-button"
+                        type="button"
+                        title="Рассчитать урон по акции, критам или здоровью босса"
+                        aria-label="Открыть калькулятор урона"
+                      ><span aria-hidden="true">∑</span> Расчёт</button>
+                    </span>
+                  </div>
+                  <div id="boss-actions-body" class="boss-weapon-list"></div>
+                  <div class="boss-combat-auxiliary">
+                    <div id="boss-needle-action" class="boss-needle-action" data-state="loading">
+                      <img
+                        class="boss-needle-icon"
+                        src="https://oldprison-prod-assets-cdn-yandex.luckygem.online/assets/VIP/iglaDamage.webp"
+                        alt=""
+                      >
+                      <span class="boss-needle-copy">
+                        <strong>Игла</strong>
+                        <small id="boss-needle-meta">Проверяем общак…</small>
+                      </span>
+                      <span
+                        id="boss-needle-button-wrap"
+                        class="boss-needle-button-wrap"
+                        data-tooltip="нет общака"
+                        title="нет общака"
+                      >
+                        <button
+                          id="boss-needle-btn"
+                          class="boss-needle-button"
+                          type="button"
+                          aria-describedby="boss-needle-meta"
+                          disabled
+                        >Пробить урон</button>
+                      </span>
+                    </div>
+                    <div id="boss-talents" class="boss-talents-card" hidden></div>
+                  </div>
+                </div>
+              </div>
+
+              <details class="inline-settings boss-live-settings">
+                <summary>Автообновление боя</summary>
+                <div class="inline-settings-body">
+                  <div class="field-grid field-grid-compact">
+                    <label class="field">
+                      <span>Интервал, сек.</span>
+                      <input id="boss-auto-interval" type="number" min="5" value="10">
+                    </label>
+                  </div>
+                  <label class="toggle compact-toggle">
+                    <input id="boss-auto-refresh" type="checkbox" checked>
+                    <span>Обновлять бой автоматически</span>
+                  </label>
+                  <p id="boss-auto-status" class="inline-note">Автообновление включено.</p>
+                </div>
+              </details>
+            </section>
+
+            <section class="card control-card boss-queue-card full-span">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ПЛАН БОЁВ</p>
+                  <h2>Сформировать очередь</h2>
+                  <p class="card-subtitle">Выберите босса и режим, добавьте их в план или соберите все доступные автоматически.</p>
+                </div>
+              </div>
+
+              <div class="boss-queue-workflow">
+                <div class="boss-queue-builder">
+                  <div class="workflow-step"><span>1</span><strong>Кого атаковать</strong></div>
+                  <div class="field-grid boss-picker-grid">
+                    <label class="field field-wide">
+                      <span>Фильтр каталога</span>
+                      <select id="boss-category">
+                        <option value="startable">Доступные для запуска</option>
+                        <option value="combo">Только с комбо</option>
+                        <option value="">Все боссы</option>
+                        <option value="1">Беспредельщики</option>
+                        <option value="2">Надзиратели</option>
+                        <option value="3">Рецидивисты</option>
+                      </select>
+                    </label>
+                    <label class="field field-wide">
+                      <span>Босс</span>
+                      <select id="boss-select"></select>
+                    </label>
+                  </div>
+
+                  <div class="workflow-step"><span>2</span><strong>Как проводить бой</strong></div>
+                  <div class="field-grid boss-mode-grid">
+                    <label class="field">
+                      <span>Режим</span>
+                      <div class="boss-mode-control">
+                        <select id="boss-mode"></select>
+                        <span id="boss-mode-collection" class="boss-collection-counter" hidden></span>
+                      </div>
+                    </label>
+                    <label class="field boss-combo-field" hidden>
+                      <span>Комбо</span>
+                      <div class="combo-mode-control boss-combo-collection-control">
+                        <select id="boss-combo-mode"></select>
+                        <span id="boss-combo-mode-collection" class="boss-collection-counter" hidden></span>
+                        <button id="boss-combo-inline-btn" class="action-button action-button-mini action-button-ghost combo-mode-button" type="button" hidden>Комбо</button>
+                      </div>
+                    </label>
+                  </div>
+
+                  <label id="boss-auto-kill-solo-field" class="toggle" hidden><input id="boss-auto-kill-solo" type="checkbox" checked><span>Убить автоматически</span></label>
+                  <label class="toggle"><input id="boss-use-combo" type="checkbox" checked><span>Пробивать комбо, если вбито</span></label>
+
+                  <div class="workflow-step"><span>3</span><strong>Добавить в план</strong></div>
+                  <div class="button-row boss-add-actions">
+                    <button id="boss-run-queue-add" class="action-button" type="button">Добавить в очередь</button>
+                    <button id="boss-start-btn" class="action-button action-button-ghost">Запустить сразу</button>
+                    <button id="boss-buy-selected-key-btn" class="action-button action-button-ghost" type="button" hidden>Купить ключ</button>
+                  </div>
+                  <p id="boss-selected-key-note" class="inline-note">Выберите босса, чтобы увидеть доступность ключа.</p>
+
+                  <details id="boss-queue-settings" class="inline-settings boss-queue-settings">
+                    <summary>Правила автоформирования</summary>
+                    <div class="inline-settings-body boss-auto-rules">
+                      <div class="field boss-exclude-field">
+                        <details id="boss-run-queue-exclude-panel" class="boss-exclude-panel">
+                          <summary>
+                            <span class="boss-exclude-summary-main">Участники очереди</span>
+                            <span id="boss-run-queue-exclude-summary" class="boss-exclude-summary-count">все боссы</span>
+                          </summary>
+                          <div class="boss-exclude-template-row">
+                            <span class="boss-exclude-actions-title">Сохранённые наборы</span>
+                            <select id="boss-exclude-template-select" class="boss-exclude-template-select" aria-label="Сохранённый набор боссов"></select>
+                            <input id="boss-exclude-template-name" class="boss-exclude-template-name" type="text" placeholder="Название набора" aria-label="Название набора">
+                            <div class="boss-exclude-template-actions">
+                              <button class="action-button action-button-mini action-button-alt js-boss-exclude-action" type="button" data-action="save-template" title="Обновить выбранный набор текущим выбором боссов и режимов">Сохранить изменения</button>
+                              <button class="action-button action-button-mini action-button-ghost js-boss-exclude-action" type="button" data-action="create-template" title="Создать отдельный набор из текущего выбора боссов и режимов">Сохранить как новый</button>
+                              <button class="action-button action-button-mini action-button-danger js-boss-exclude-action" type="button" data-action="delete-template" title="Удалить выбранный набор; текущий выбор боссов останется без изменений">Удалить набор</button>
+                            </div>
+                          </div>
+                          <div id="boss-run-queue-exclude-actions" class="boss-exclude-actions">
+                            <span class="boss-exclude-actions-title">Быстрый выбор</span>
+                            <button class="action-button action-button-mini action-button-ghost js-boss-exclude-action" type="button" data-action="all">Выбрать всех</button>
+                            <button class="action-button action-button-mini action-button-ghost js-boss-exclude-action" type="button" data-action="available" title="Выбрать только боссов, которых можно запустить прямо сейчас">Только доступных</button>
+                            <button class="action-button action-button-mini action-button-ghost js-boss-exclude-action" type="button" data-action="clear">Снять выбор</button>
+                          </div>
+                          <p id="boss-exclude-template-note" class="inline-note boss-exclude-template-note"></p>
+                          <div id="boss-run-queue-exclude-list" class="boss-exclude-list"></div>
+                        </details>
+                      </div>
+                      <fieldset class="boss-auto-rules-group">
+                        <legend>Правила боя</legend>
+                        <label class="field boss-auto-rules-combo"><span>Комбо</span><select id="boss-auto-queue-combo-mode"><option value="">Авто · из сохранённых</option><option value="pacansky">Пацанский</option><option value="blotnoy">Блатной</option><option value="avtoritetny">Авторитетный</option><option value="vorovskoy">Воровской</option></select></label>
+                        <label class="toggle"><input id="boss-auto-queue-use-combo" type="checkbox" checked><span>Пробивать сохранённое комбо</span></label>
+                        <label class="toggle"><input id="boss-auto-queue-kill-solo" type="checkbox" checked><span>Автоматически убивать «в одного»</span></label>
+                        <button id="boss-auto-queue-apply-selected" class="action-button action-button-mini action-button-ghost" type="button" title="Заменить личные правила боя у выбранных участников">Применить к выбранным боссам</button>
+                      </fieldset>
+                      <fieldset class="boss-auto-rules-group">
+                        <legend>Дополнительно</legend>
+                        <label class="toggle" title="Для вещей и наколок предпочтителен недособранный режим боя до 3 млрд HP; иначе — пацанский.">
+                          <input id="boss-run-queue-smart-collection" type="checkbox">
+                          <span>Подбирать режим по недостающим наградам</span>
+                        </label>
+                        <label class="toggle" title="При нехватке ключей докупает их перед стартом боя только если ожидаемая награда босса больше цены покупки.">
+                          <input id="boss-auto-buy-keys" type="checkbox">
+                          <span>Покупать ключ, если окупится наградой</span>
+                        </label>
+                        <label class="field boss-delay-field">
+                          <span>Пауза между действиями, мс</span>
+                          <input id="boss-delay" type="number" min="0" value="0">
+                        </label>
+                      </fieldset>
+                    </div>
+                  </details>
+                </div>
+
+                <div class="boss-queue-list">
+                  <div class="section-heading">
+                    <div>
+                      <span class="section-kicker">ГОТОВО К ЗАПУСКУ</span>
+                      <h3>Очередь</h3>
+                    </div>
+                    <label class="toggle compact-toggle">
+                      <input id="boss-auto-start-next" type="checkbox" checked>
+                      <span>Автостарт следующего босса</span>
+                    </label>
+                  </div>
+
+                  <div id="boss-run-queue-summary" class="stats-grid stats-grid-tight"></div>
+                  <div class="boss-queue-plan-controls">
+                    <label class="field field-wide">
+                      <span>Как сформировать очередь</span>
+                      <div class="boss-queue-source-row">
+                        <select id="boss-run-source-select">
+                          <option value="auto">По правилам автоформирования</option>
+                        </select>
+                        <button id="boss-run-source-apply" class="action-button action-button-mini" type="button">Сформировать очередь</button>
+                      </div>
+                    </label>
+                    <details class="inline-settings boss-queue-preset-management">
+                      <summary>Управление пресетами</summary>
+                      <div class="inline-settings-body boss-queue-preset-row">
+                        <select id="boss-run-preset-select"></select>
+                        <input id="boss-run-preset-name" type="text" maxlength="80" placeholder="Название нового пресета">
+                        <button id="boss-run-preset-save" class="action-button action-button-mini action-button-alt" type="button">Сохранить текущую очередь</button>
+                        <button id="boss-run-preset-delete" class="text-button text-button-danger" type="button">Удалить выбранный пресет</button>
+                      </div>
+                    </details>
+                  </div>
+                  <div class="boss-queue-table-wrap">
+                    <div id="boss-run-queue-body" class="boss-run-queue-list" role="list"></div>
+                  </div>
+                  <div class="button-row queue-primary-actions">
+                    <button id="boss-run-next-btn" class="action-button action-button-alt">Запустить следующего</button>
+                    <button id="boss-run-queue-clear" class="text-button text-button-danger" type="button">Очистить текущую очередь</button>
+                  </div>
+                  <p id="boss-run-queue-note" class="inline-note">Автосбор проходит только по выбранным боссам и учитывает комбо и имеющиеся ключи.</p>
+                </div>
+              </div>
+            </section>
+
+            <section class="card boss-catalog-card full-span collapsible-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">КОЛЛЕКЦИЯ БОССОВ</p>
+                  <h2>Каталог боссов</h2>
+                  <p class="card-subtitle">Награды, лимиты и доступность запуска. Собранные предметы отмечены зелёной галочкой.</p>
+                </div>
+              </div>
+              <div id="boss-collection-summary" class="stats-grid stats-grid-tight"></div>
+              <div id="boss-queue-summary" class="stats-grid stats-grid-tight"></div>
+              <div class="boss-catalog-filter-controls">
+                <div
+                  id="boss-catalog-category-nav"
+                  class="collection-category-nav boss-catalog-category-nav"
+                  aria-label="Фильтр по категориям боссов"
+                ></div>
+                <label class="field boss-catalog-status-field">
+                  <select id="boss-catalog-status-filter" aria-label="Состояние">
+                    <option value="all">Все боссы</option>
+                    <option value="startable">Доступные для атаки</option>
+                    <option value="missing">Не собранные</option>
+                    <option value="combo">Только с комбо</option>
+                  </select>
+                </label>
+              </div>
+              <div class="table-wrap">
+                <table class="compact-table boss-catalog-table">
+                  <thead>
+                    <tr>
+                      <th>Босс</th>
+                      <th>Комбо</th>
+                      <th>Коллекция</th>
+                      <th>Нужно / источник</th>
+                      <th>Использовано / лимит</th>
+                      <th>Статус</th>
+                      <th>Действие</th>
+                    </tr>
+                  </thead>
+                  <tbody id="boss-queue-body"></tbody>
+                </table>
+              </div>
+            </section>
+
+            <section class="card boss-rewards-card full-span collapsible-card" hidden>
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">КОЛЛЕКЦИЯ БОССОВ</p>
+                  <h2>Награды режимов и комбо</h2>
+                  <p class="card-subtitle">Реальные предметы выбранного режима.</p>
+                </div>
+                <label class="field boss-reward-select-field">
+                  <span>Босс</span>
+                  <select id="boss-reward-select"></select>
+                </label>
+              </div>
+              <div id="boss-reward-summary" class="stats-grid"></div>
+              <div id="boss-reward-grid" class="boss-reward-grid"></div>
+            </section>
+
+          </div>
+
+        </section>
+
+        <section class="tab-panel" data-panel="prison">
+          <div class="panel-grid prison-dashboard-layout">
+            <section class="card control-card full-span prison-control-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ТЮРЬМА</p>
+                  <h2>Автопроход</h2>
+                  <p class="card-subtitle">Выберите цель и включите автозапуск.</p>
+                </div>
+                <div class="card-head-actions">
+                  <div id="prison-automation-badge" class="badge badge-neutral">загрузка</div>
+                  <button id="prison-tick-btn" class="text-button" type="button">Проверить</button>
+                  <button id="prison-status-btn" class="text-button" type="button">Обновить</button>
+                </div>
+              </div>
+
+              <div class="field-grid prison-target-fields">
+                <label class="field">
+                  <span>Что проходим</span>
+                  <select id="prison-target-type">
+                    <option value="prison">Тюрьма</option>
+                    <option value="master">Мастерская</option>
+                  </select>
+                </label>
+                <label class="field prison-target-field-wide">
+                  <span>Цель по умолчанию</span>
+                  <select id="prison-select"></select>
+                </label>
+                <label id="prison-mode-field" class="field">
+                  <span>Зона</span>
+                  <select id="prison-mode">
+                    <option value="day">День</option>
+                    <option value="night">Ночь</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Цель ходки</span>
+                  <select id="prison-queue-goal">
+                    <option value="runs">Количество ходок</option>
+                    <option value="collection">До полного сбора вещей</option>
+                  </select>
+                </label>
+                <label id="prison-queue-runs-field" class="field">
+                  <span>Сколько ходок</span>
+                  <input id="prison-queue-runs" type="number" min="1" max="10000" value="1">
+                </label>
+              </div>
+
+              <div id="prison-automation-message" class="automation-status-message prison-automation-alert" role="status" hidden></div>
+              <div id="prison-automation-progress" class="prison-automation-progress" aria-live="polite"></div>
+
+              <div class="prison-option-grid prison-option-grid-primary">
+                <label class="toggle prison-option-card">
+                  <input id="prison-auto" type="checkbox">
+                  <span><strong>Автозапуск</strong></span>
+                </label>
+                <label class="toggle prison-option-card">
+                  <input id="prison-auto-profit" type="checkbox" checked>
+                  <span><strong>Собирать общак</strong></span>
+                </label>
+                <label class="toggle prison-option-card">
+                  <input id="prison-auto-buy-items" type="checkbox">
+                  <span><strong>Выкупать вещи мастера</strong></span>
+                </label>
+              </div>
+
+              <div class="prison-profit-strip">
+                <span class="section-kicker">ОБЩАК</span>
+                <div id="prison-business-summary" class="prison-profit-summary"></div>
+                <button id="prison-profit-collect-btn" class="text-button" type="button">Собрать</button>
+              </div>
+
+              <details class="inline-settings prison-advanced-settings">
+                <summary>Дополнительные настройки</summary>
+                <div class="inline-settings-body">
+                  <div class="field-grid">
+                    <label class="field">
+                      <span>Запас энергии после старта</span>
+                      <input id="prison-auto-min-energy" type="number" min="0" value="0">
+                    </label>
+                  </div>
+                  <label class="toggle">
+                    <input id="prison-use-podogrev" type="checkbox" checked>
+                    <span>Использовать доступный подогрев перед проходом</span>
+                  </label>
+                  <div class="field-grid">
+                    <label class="field">
+                      <span>Приоритет восстановления</span>
+                      <select id="prison-energy-order">
+                        <option value="chefir_soap">Чифир → мыло</option>
+                        <option value="soap_chefir">Мыло → чифир</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Резерв чифира</span>
+                      <input id="prison-chefir-reserve" type="number" min="0" value="0">
+                    </label>
+                    <label class="field">
+                      <span>Лимит мыла в сутки</span>
+                      <input id="prison-soap-daily-limit" type="number" min="0" value="0">
+                    </label>
+                    <label class="field">
+                      <span>Лимит чифира в сутки</span>
+                      <input id="prison-chefir-daily-limit" type="number" min="0" value="0">
+                    </label>
+                  </div>
+                  <label class="toggle">
+                    <input id="prison-allow-chefir" type="checkbox">
+                    <span>Разрешить тратить чифир</span>
+                  </label>
+                  <label class="toggle">
+                    <input id="prison-allow-soap" type="checkbox">
+                    <span>Разрешить тратить мыло</span>
+                  </label>
+                </div>
+              </details>
+
+              <section class="prison-queue-editor" aria-label="Очередь ходок">
+                <div class="card-head">
+                  <div>
+                    <p class="card-kicker">ОЧЕРЕДЬ</p>
+                    <h3>План ходок</h3>
+                    <p class="card-subtitle">Первый пункт выполняется сейчас. Зарубный пункт исчезает сразу после серверного зачёта цели — полный круг не требуется.</p>
+                  </div>
+                  <button id="prison-queue-add" class="text-button" type="button">Добавить в очередь</button>
+                </div>
+                <div class="prison-queue-flow" aria-label="Как работает очередь">
+                  <span><b>1</b> Проверка цели</span>
+                  <span><b>2</b> Минимальный шаг</span>
+                  <span><b>3</b> Сверка и удаление</span>
+                </div>
+                <div id="prison-queue-list" class="automation-queue-list"></div>
+              </section>
+
+              <div class="button-row">
+                <button id="prison-save-btn" class="action-button">Сохранить настройки</button>
+                <button id="prison-run-btn" class="action-button action-button-alt">Пройти сейчас</button>
+                <button id="prison-dry-btn" class="action-button action-button-ghost">Предпросмотр</button>
+              </div>
+            </section>
+
+            <section class="card full-span prison-collection-overview">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ЭКИПИРОВКА</p>
+                  <h2>Вещи и бонусы</h2>
+                </div>
+              </div>
+              <div id="prison-collection-summary" class="stats-grid prison-collection-summary"></div>
+            </section>
+
+            <section class="card full-span prison-zone-section">
+              <div class="card-head">
+                <h2>Тюрьмы</h2>
+                <span id="prison-zone-count" class="muted-copy"></span>
+              </div>
+              <div id="prison-zone-grid" class="prison-zone-grid"></div>
+            </section>
+
+            <section class="card full-span prison-zone-section">
+              <div class="card-head">
+                <h2>Мастерские</h2>
+                <span id="prison-master-count" class="muted-copy"></span>
+              </div>
+              <div id="prison-master-grid" class="prison-zone-grid"></div>
+            </section>
+
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="zaruba">
+          <div class="panel-grid zaruba-dashboard-layout">
+            <section class="card full-span zaruba-overview-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ЗАРУБЫ</p>
+                  <h2>Состояние и прогресс</h2>
+                  <p class="card-subtitle">Названия, лимиты и блокировки берутся из ответа игры. Пропуск за мыло доступен на карточках заданий с подтверждением.</p>
+                </div>
+                <div class="card-head-actions">
+                  <span id="zaruba-updated" class="muted-copy">обновляю…</span>
+                  <span id="zaruba-automation-badge" class="badge badge-neutral">выключена</span>
+                  <button id="zaruba-refresh-btn" class="text-button" type="button">Обновить</button>
+                </div>
+              </div>
+              <div id="zaruba-summary" class="stats-grid"></div>
+              <div id="zaruba-modes" class="zaruba-mode-grid"></div>
+              <select id="zaruba-mode-select" class="sr-only" aria-label="Выбранный режим Зарубы"></select>
+              <div class="button-row zaruba-primary-actions zaruba-action-buttons">
+                <button class="action-button" type="button" data-zaruba-action="start">Начать зарубу</button>
+                <button class="action-button action-button-alt" type="button" data-zaruba-action="claim">Забрать награду</button>
+                <button id="zaruba-bags-link" class="action-button action-button-ghost" type="button">Сумки</button>
+              </div>
+              <div class="zaruba-rules-section">
+                <div class="zaruba-rules-head">
+                  <div class="zaruba-automation-heading">
+                    <div class="zaruba-automation-icons" aria-hidden="true">
+                      <img src="/assets/game-icons/extracted/png-4x/patsanskaya-posylka-4x.png" alt="">
+                      <img src="/assets/game-icons/extracted/png-4x/blatnaya-posylka-4x.png" alt="">
+                      <img src="/assets/game-icons/extracted/png-4x/avtoritetnaya-posylka-4x.png" alt="">
+                    </div>
+                    <div>
+                      <p class="card-kicker">АВТОМАТИКА</p>
+                      <h3>Правила выполнения</h3>
+                      <p class="card-subtitle">Минимальный расход и повторная сверка после каждого шага.</p>
+                    </div>
+                  </div>
+                  <label class="toggle compact-toggle zaruba-main-toggle">
+                    <input id="zaruba-auto-enabled" type="checkbox">
+                    <span>Автоматика</span>
+                  </label>
+                </div>
+                <div class="automation-option-grid zaruba-rules-grid">
+                  <label class="toggle automation-option-card">
+                    <input id="zaruba-auto-start" type="checkbox">
+                    <span><strong>Автозапуск</strong></span>
+                  </label>
+                  <article class="automation-option-card automation-rule-card">
+                    <span><strong>Награды, Тюрьмы и мастера</strong><small>Забирает награды и добавляет задания в очередь</small></span>
+                  </article>
+                  <article class="automation-option-card automation-rule-card">
+                    <span><strong>Прибыль учитывается</strong><small>Лишняя энергия в очередь не попадёт</small></span>
+                  </article>
+                </div>
+                <details class="inline-settings zaruba-advanced-rules">
+                  <summary>Дополнительные настройки</summary>
+                  <div class="inline-settings-body">
+                    <div class="field-grid">
+                      <label class="field">
+                        <span>Резервный мастер</span>
+                        <select id="zaruba-intellect-master">
+                          <option value="">Автовыбор по энергии</option>
+                        </select>
+                        <small>Система выбирает мастера с минимальным расходом.</small>
+                      </label>
+                      <label class="field">
+                        <span>Резерв чифира</span>
+                        <input id="zaruba-chefir-reserve" type="number" min="0" value="0">
+                      </label>
+                    </div>
+                    <div id="zaruba-policy-controls">
+                      <div class="automation-option-grid">
+                        <label class="toggle"><input type="checkbox" data-quest-setting="claimRewards" checked><span>Забирать награды</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="directTasks" checked><span>Прибыль, подогрев и взаимодействия</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="queuePrisons" checked><span>Зоны в очередь</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="queueMasters" checked><span>Мастеров в очередь</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="playKatala" checked><span>Катала</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="playSlots" checked><span>Фартовый</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="slotsBuyMatches"><span>Покупать при отсутствии спичек на ставку</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="playWheel" checked><span>Колесо фортуны</span></label>
+                        <label class="toggle"><input type="checkbox" data-quest-setting="wheelBuyTickets" checked><span>Покупать билеты Колеса</span></label>
+                      </div>
+                      <div class="field-grid">
+                        <label class="field"><span>Общий лимит рублей в сутки</span><input type="number" min="0" step="1" placeholder="Без лимита" data-quest-setting="rublesDailyLimit"><small>Катала, Колесо, спички и оружие для Зарубы. 0 — только бесплатные действия; пусто — без лимита.</small></label>
+                        <label class="field"><span>Не начинать Зарубы после уровня</span><input type="number" min="1" step="1" placeholder="Без ограничения" data-quest-setting="maxLevel"><small>Текущая Заруба завершается, награда забирается.</small></label>
+                        <label class="field"><span>ID получателя нычек</span><input type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" placeholder="Автовыбор" data-quest-setting="stashRecipientId"><small>Отправляются только дубликаты.</small></label>
+                        <label class="field"><span>Позиция новых боссов</span><select data-quest-setting="bossInsertPosition"><option value="back">В конце очереди</option><option value="front">Перед ожидающими боссами</option></select></label>
+                      </div>
+                      <label class="toggle"><input type="checkbox" data-quest-setting="queueBosses"><span>Боссы в очередь</span></label>
+                      <p class="inline-note">Без подходящего правила: пацанский режим, без ограничения по оружию. Недостающее оружие для урона покупается в пределах общего лимита. Существующие бои сохраняют настройки.</p>
+                      <div id="zaruba-boss-rules"></div>
+                      <button id="zaruba-boss-rule-add" type="button" class="text-button">Добавить правило босса</button>
+                    </div>
+                    <p class="inline-note">Автопропуски за мыло пока не поддерживаются.</p>
+                    <label class="toggle quest-disabled"><input id="zaruba-skip-soap" type="checkbox" disabled><span>Пропустить за мыло</span></label>
+                  </div>
+                </details>
+                <div class="zaruba-rules-footer">
+                  <button id="zaruba-save-btn" class="action-button action-button-mini" type="button">Сохранить правила</button>
+                  <div id="zaruba-last-action" class="automation-status-message" role="status"></div>
+                </div>
+                <div id="zaruba-history" class="zaruba-activity-list"></div>
+              </div>
+            </section>
+
+            <section class="card full-span zaruba-task-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ТЕКУЩИЕ ЗАДАНИЯ</p>
+                  <h2>Активная заруба</h2>
+                </div>
+              </div>
+              <div id="zaruba-active" class="zaruba-active-state"></div>
+              <div id="zaruba-task" class="zaruba-task-state"></div>
+              <div id="zaruba-boss-queue-status" class="automation-status-message" role="status"></div>
+            </section>
+
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="misc">
+          <div
+            id="misc-section-deals"
+            class="panel-grid misc-dashboard-layout misc-section-panel"
+            data-misc-section="deals"
+            role="region"
+            aria-label="Делюги"
+          >
+            <section class="card full-span misc-monthly-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ЕЖЕДНЕВНАЯ ДЕЛЮГА</p>
+                  <h2>Задание месяца</h2>
+                  <p class="card-subtitle">Категории заданий настраиваются отдельно. Боссы используют настройки своей очереди.</p>
+                </div>
+                <div class="misc-head-actions">
+                  <label class="toggle compact-toggle">
+                    <input id="misc-monthly-auto" type="checkbox" checked>
+                    <span>Автовыполнение дешёвых</span>
+                  </label>
+                  <button id="misc-monthly-run-btn" class="text-button" type="button">Проверить сейчас</button>
+                </div>
+              </div>
+              <div id="misc-monthly-summary" class="stats-grid"></div>
+              <div id="misc-monthly-today" class="misc-today-card"></div>
+              <details class="inline-settings">
+                <summary>Настройки выполнения Делюг</summary>
+                <div class="inline-settings-body" id="monthly-policy-controls">
+                  <div class="automation-option-grid">
+                    <label class="toggle"><input type="checkbox" data-quest-setting="claimRewards" checked><span>Забирать награды месяца</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="simpleTasks" checked><span>Подогрев и отправка нычек</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="interactions" checked><span>Взаимодействия</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="playKatala" checked><span>Катала</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="energyTasks" checked><span>Задания зон и мастеров</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="queueBosses" checked><span>Добавлять босса в очередь</span></label>
+                    <label class="toggle"><input type="checkbox" data-quest-setting="queueMasterSessions"><span>Полные занятия мастеров через очередь ходок</span></label>
+                  </div>
+                  <p class="inline-note">Очередь использует настройки ходок. Без этой опции мастер выполняется по шагам. Выключение категории прекращает добавление новых задач; уже добавленные остаются в очереди.</p>
+                  <div class="field-grid">
+                    <label class="field"><span>Мастер для интеллекта</span><select data-quest-setting="intellectMasterId" data-quest-number="true"></select></label>
+                    <label class="field"><span>Тюрьма для авторитета</span><select data-quest-setting="authorityPrisonId" data-quest-number="true"></select></label>
+                    <label class="field"><span>ID получателя нычек</span><input type="text" inputmode="numeric" pattern="[1-9][0-9]{0,19}" placeholder="Автовыбор" data-quest-setting="stashRecipientId"></label>
+                  </div>
+                  <button id="monthly-policy-save" type="button" class="action-button action-button-mini">Сохранить настройки Делюг</button>
+                  <p id="monthly-policy-status" class="inline-note" role="status"></p>
+                </div>
+              </details>
+              <div id="misc-monthly-calendar" class="misc-monthly-calendar"></div>
+            </section>
+          </div>
+
+          <div
+            id="misc-section-stashes"
+            class="panel-grid misc-dashboard-layout misc-section-panel"
+            data-misc-section="stashes"
+            role="region"
+            aria-label="Нычки"
+            hidden
+          >
+            <section class="card full-span misc-stash-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">НЫЧКИ</p>
+                  <h2>Впаривание нычек</h2>
+                  <p class="card-subtitle">Готовые комплекты продаются по очереди с защитой от лимита запросов. После завершения сверяется реально полученный ресурс.</p>
+                </div>
+                <button id="misc-vparit-all-btn" class="action-button" type="button">Впарить всё</button>
+              </div>
+              <div id="misc-stash-summary" class="stats-grid"></div>
+              <div id="misc-vparit-status" class="misc-vparit-status" aria-live="polite"></div>
+            </section>
+          </div>
+
+          <div
+            id="misc-section-bags"
+            class="panel-grid bags-dashboard-layout misc-section-panel"
+            data-misc-section="bags"
+            role="region"
+            aria-label="Сумки"
+            hidden
+          >
+            <section class="card full-span bags-dashboard-card">
+              <div class="card-head bags-dashboard-head">
+                <div>
+                  <p class="card-kicker">СУМКИ С ВЕЩАМИ</p>
+                  <h2>Сумки</h2>
+                  <p class="card-subtitle">Все балансы, прогресс комплектов и доступные открытия — на одном экране.</p>
+                </div>
+                <div class="card-head-actions">
+                  <span id="bags-updated" class="muted-copy">Откройте раздел для загрузки</span>
+                  <button id="bags-refresh" class="text-button" type="button">Обновить</button>
+                </div>
+              </div>
+
+              <div id="bags-summary" class="bags-summary-strip"></div>
+              <div id="bags-last-reward" class="bags-last-reward" hidden></div>
+
+              <div class="bags-browser">
+                <div class="bags-toolbar">
+                  <div id="bags-family-switch" class="bags-segmented-control" role="tablist" aria-label="Источник сумок">
+                    <button type="button" class="is-active" role="tab" aria-selected="true" data-bags-family="zaruba">Зарубские</button>
+                    <button type="button" role="tab" aria-selected="false" data-bags-family="brigade">Бригадные</button>
+                  </div>
+                  <div id="bags-zaruba-mode-switch" class="bags-mode-switch" aria-label="Тип зарубской сумки"></div>
+                </div>
+                <div class="bags-list-heading">
+                  <div>
+                    <small>ВЫБРАННАЯ КАТЕГОРИЯ</small>
+                    <strong id="bags-list-title">Зарубские сумки</strong>
+                  </div>
+                  <span id="bags-list-count" class="badge badge-neutral">0 сумок</span>
+                </div>
+                <div id="bags-list" class="bags-card-grid" aria-live="polite">
+                  <p class="inline-note">Загружаю сумки…</p>
+                </div>
+              </div>
+
+            </section>
+          </div>
+
+          <div
+            id="misc-section-containers"
+            class="panel-grid loot-containers-layout misc-section-panel"
+            data-misc-section="containers"
+            role="region"
+            aria-label="Посылки и баулы"
+            hidden
+          >
+            <section class="card full-span loot-containers-hero">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ДОБЫЧА БЕЗ ПОКУПКИ ВАЛЮТЫ</p>
+                  <h2>Посылки и баулы</h2>
+                  <p class="card-subtitle">До открытия видно баланс тушёнки, уровень баула и всё уже накопленное содержимое. Баул выгоднее забирать на максимальном 25-м уровне.</p>
+                </div>
+                <button id="loot-containers-refresh" class="text-button" type="button">Обновить содержимое</button>
+              </div>
+              <div id="loot-containers-summary" class="stats-grid loot-containers-summary"></div>
+              <div id="loot-parcel-statistics" class="stats-grid loot-parcel-statistics"></div>
+
+              <div class="loot-container-grid">
+                <article class="loot-container-card is-parcel">
+                  <div class="loot-container-card-head">
+                    <div>
+                      <span class="loot-container-eyebrow">ПОСЫЛКА</span>
+                      <h3>Открывается за тушёнку</h3>
+                    </div>
+                    <span id="loot-parcel-badge" class="badge badge-neutral">загрузка</span>
+                  </div>
+                  <p>Покажем всю выпавшую валюту, нычки и отдельно отметим, выпала ли шмотка.</p>
+                  <div id="loot-parcel-status" class="loot-container-status"></div>
+                  <div id="loot-parcel-progress" class="loot-container-progress"></div>
+                  <div id="loot-parcel-rewards" class="loot-parcel-result"></div>
+                  <button id="loot-parcel-open" class="action-button" type="button" disabled>Открыть · 1 тушёнка</button>
+                </article>
+
+                <article class="loot-container-card is-baul">
+                  <div class="loot-container-card-head">
+                    <div>
+                      <span class="loot-container-eyebrow">БАУЛ</span>
+                      <h3>Открывается за мыло</h3>
+                    </div>
+                    <span id="loot-baul-badge" class="badge badge-neutral">загрузка</span>
+                  </div>
+                  <div id="loot-baul-status" class="loot-container-status"></div>
+                  <div id="loot-baul-rewards" class="loot-reward-groups"></div>
+                  <label id="loot-baul-early-wrap" class="toggle compact-toggle loot-baul-early" hidden>
+                    <input id="loot-baul-allow-early" type="checkbox">
+                    <span>Разрешить открыть до 25-го уровня</span>
+                  </label>
+                  <button id="loot-baul-open" class="action-button" type="button" disabled>Открыть · 20 мыла</button>
+                </article>
+              </div>
+              <details class="inline-settings baul-automation-settings">
+                <summary>Безопасная автоматика баула</summary>
+                <div class="inline-settings-body">
+                  <div class="field-grid">
+                    <label class="field">
+                      <span>Минимальный уровень</span>
+                      <input id="baul-auto-min-level" type="number" min="1" max="25" value="25">
+                    </label>
+                    <label class="field">
+                      <span>Лимит мыла в сутки</span>
+                      <input id="baul-auto-soap-limit" type="number" min="0" value="0">
+                    </label>
+                  </div>
+                  <label class="toggle"><input id="baul-auto-enabled" type="checkbox"><span>Включить автоматику</span></label>
+                  <label class="toggle"><input id="baul-auto-require-wearable" type="checkbox"><span>Ждать наколку</span></label>
+                  <label class="toggle"><input id="baul-auto-allow-soap" type="checkbox"><span>Разрешить тратить мыло в пределах лимита</span></label>
+                  <div class="button-row compact-actions">
+                    <button id="baul-auto-save" class="action-button" type="button">Сохранить</button>
+                  </div>
+                  <p id="baul-auto-status" class="inline-note">Автоматика выключена.</p>
+                </div>
+              </details>
+            </section>
+
+          </div>
+
+          <div
+            id="misc-section-collection"
+            class="panel-grid wearable-collection-layout misc-section-panel"
+            data-misc-section="collection"
+            role="region"
+            aria-label="Коллекция вещей"
+            hidden
+          >
+            <section class="card full-span wearable-collection-hero">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ПОЛНЫЙ КАТАЛОГ</p>
+                  <h2>Коллекция вещей</h2>
+                  <p class="card-subtitle">Одежда и наколки из всех 42 зон. Сначала — предметы с уроном и энергией; чисто визуальные комплекты сложены в отдельные папки.</p>
+                </div>
+                <div class="collection-head-actions">
+                  <span id="wearable-collection-updated" class="muted-copy"></span>
+                  <button id="wearable-collection-refresh" class="text-button" type="button">Обновить каталог</button>
+                </div>
+              </div>
+              <div id="wearable-collection-summary" class="stats-grid wearable-collection-summary"></div>
+              <div class="collection-kind-switch" role="tablist" aria-label="Тип предметов">
+                <button type="button" class="is-active" data-collection-kind="all" aria-selected="true">Все</button>
+                <button type="button" data-collection-kind="tattoo" aria-selected="false">Татуировки</button>
+                <button type="button" data-collection-kind="clothing" aria-selected="false">Одежда</button>
+              </div>
+              <div id="wearable-collection-matrix" class="collection-bonus-matrix"></div>
+              <div id="wearable-collection-specials" class="wearable-special-grid"></div>
+            </section>
+
+            <section class="card full-span wearable-collection-browser">
+              <div class="collection-toolbar">
+                <label class="field collection-search-field">
+                  <span>Поиск по названию или источнику</span>
+                  <input id="wearable-collection-search" type="search" autocomplete="off" placeholder="Например: Ворон, яд, Крест…">
+                </label>
+                <label class="field">
+                  <span>Бонус</span>
+                  <select id="wearable-collection-bonus-filter">
+                    <option value="damage">Любой урон</option>
+                    <option value="all" selected>Все предметы</option>
+                    <option value="poison">Яд</option>
+                    <option value="gunshot">Самопал</option>
+                    <option value="knife">Финка</option>
+                    <option value="maxEnergy">Энергия</option>
+                    <option value="other">Другие бонусы</option>
+                    <option value="visual">Только внешний вид</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Состояние</span>
+                  <select id="wearable-collection-status-filter">
+                    <option value="all">Все</option>
+                    <option value="complete">Собрано</option>
+                    <option value="missing">Не собрано</option>
+                    <option value="partial">Частично собрано</option>
+                  </select>
+                </label>
+              </div>
+              <div id="wearable-collection-category-nav" class="collection-category-nav" aria-label="Фильтр по источникам"></div>
+              <div id="wearable-collection-status" class="collection-loading-state" aria-live="polite">Открой раздел, чтобы загрузить каталог.</div>
+              <div id="wearable-collection-categories" class="wearable-category-list"></div>
+            </section>
+          </div>
+
+          <div
+            id="misc-section-games"
+            class="panel-grid misc-dashboard-layout misc-section-panel"
+            data-misc-section="games"
+            role="region"
+            aria-label="Азартные активности"
+            hidden
+          >
+            <section class="card full-span misc-games-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">МИНИ-ИГРЫ</p>
+                  <h2>Азартные активности</h2>
+                  <p class="card-subtitle">Платные действия показывают цену и требуют подтверждения.</p>
+                </div>
+              </div>
+              <div id="misc-games-grid" class="misc-games-grid"></div>
+            </section>
+          </div>
+
+          <div
+            id="misc-section-events"
+            class="misc-section-panel"
+            data-misc-section="events"
+            role="region"
+            aria-label="События"
+            hidden
+          >
+          <details id="lets-cook-details" class="event-details">
+            <summary class="event-details-summary">
+              <div class="event-brief-title">
+                <span>Пора варить</span>
+                <b id="lets-cook-brief-phase" class="badge badge-neutral">загрузка</b>
+              </div>
+              <div class="event-brief-metrics">
+                <span><small>Роль</small><strong id="lets-cook-brief-role">—</strong></span>
+                <span><small>Бодряки</small><strong id="lets-cook-brief-energy">—</strong></span>
+                <span><small>Жетоны шкафа</small><strong id="lets-cook-brief-locker">—</strong></span>
+                <span><small id="lets-cook-brief-resource-label">Готово</small><strong id="lets-cook-brief-resource">—</strong></span>
+              </div>
+              <span class="event-expand-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div class="panel-grid events-dashboard-layout event-details-content">
+            <section class="card full-span event-hero-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">АКТИВНОЕ СОБЫТИЕ</p>
+                  <h2>Пора варить</h2>
+                  <p class="card-subtitle">Бесплатные бодряки используются всегда. Мыло тратится только после отдельного включения и подтверждения.</p>
+                </div>
+                <div class="event-head-actions">
+                  <span id="lets-cook-phase" class="badge badge-neutral">загрузка</span>
+                  <button id="lets-cook-refresh-btn" class="text-button" type="button">Обновить</button>
+                </div>
+              </div>
+              <div id="lets-cook-summary" class="stats-grid"></div>
+              <div class="event-progress-grid">
+                <article class="event-progress-card">
+                  <div class="event-progress-head">
+                    <span id="lets-cook-progress-title">Текущая партия</span>
+                    <strong id="lets-cook-progress-label">—</strong>
+                  </div>
+                  <div class="event-progress-track"><span id="lets-cook-progress-fill"></span></div>
+                  <p id="lets-cook-progress-note" class="inline-note"></p>
+                </article>
+                <article class="event-progress-card">
+                  <div class="event-progress-head">
+                    <span id="lets-cook-batch-title">Готовые партии</span>
+                    <strong id="lets-cook-batch-label">—</strong>
+                  </div>
+                  <div class="event-progress-track"><span id="lets-cook-batch-fill"></span></div>
+                  <p id="lets-cook-strategy-note" class="inline-note"></p>
+                </article>
+              </div>
+            </section>
+
+            <section class="card event-control-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">АВТОПРОХОЖДЕНИЕ</p>
+                  <h2>Автопрохождение</h2>
+                </div>
+                <label class="toggle compact-toggle">
+                  <input id="lets-cook-auto" type="checkbox">
+                  <span>Включено</span>
+                </label>
+              </div>
+              <div class="field-grid event-field-grid">
+                <label class="field">
+                  <span>Играть за</span>
+                  <select id="lets-cook-role">
+                    <option value="cook">Варщик · партии</option>
+                    <option value="baryga">Барыга · клиенты</option>
+                    <option value="watcher">Смотрящий · расследования</option>
+                  </select>
+                </label>
+                <label id="lets-cook-cook-partner-field" class="field">
+                  <span>Варщик → пул ID барыг</span>
+                  <input id="lets-cook-cook-partner" type="text" autocomplete="off" placeholder="123, 456, 789">
+                </label>
+                <label id="lets-cook-baryga-partner-field" class="field">
+                  <span>Барыга → пул ID варщиков</span>
+                  <input id="lets-cook-baryga-partner" type="text" autocomplete="off" placeholder="123, 456, 789">
+                </label>
+                <label class="field">
+                  <span>Проверка, сек.</span>
+                  <input id="lets-cook-interval" type="number" min="15" max="600" value="60">
+                </label>
+                <label class="field">
+                  <span>Действий за тик</span>
+                  <input id="lets-cook-actions" type="number" min="1" max="50" value="20">
+                </label>
+              </div>
+              <div class="event-soap-option">
+                <label class="toggle compact-toggle">
+                  <input id="lets-cook-soap-energy" type="checkbox">
+                  <span>Тратить мыло на бодряки</span>
+                </label>
+                <span>При нулевой энергии бот восстановит 100 бодряков за 8 мыла. При включении потребуется подтверждение.</span>
+              </div>
+              <p class="inline-note">Укажите доверенные ID через запятую, пробел или точку с запятой. Бот берёт первый доступный ID из пула; он ждёт только уже отправленную заявку доверенному ID, а ручная заявка другому игроку не блокирует отправку.</p>
+              <div id="lets-cook-offer-status" class="event-partner-status"></div>
+              <div class="event-safe-row">
+                <span id="lets-cook-soap-status" class="event-safe-mark">Мыло запрещено</span>
+                <span id="lets-cook-role-note">Роль меняется только после безопасного завершения текущего цикла. Щит не покупается автоматически; шкафы открываются только за жетоны события.</span>
+              </div>
+              <div class="button-row compact-actions">
+                <button id="lets-cook-save-btn" class="action-button" type="button">Применить</button>
+                <button id="lets-cook-tick-btn" class="text-button" type="button">Запустить тик</button>
+              </div>
+            </section>
+
+            <section class="card event-rules-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">КАК ЭТО РАБОТАЕТ</p>
+                  <h2>Правила и стратегия</h2>
+                </div>
+              </div>
+              <div class="event-rule-list">
+                <article><strong>Варщик</strong><span>За 90 бодряков готовит партию. Клиентского лимита накопления нет: бот продолжает работу и отправляет весь готовый запас указанному барыге.</span></article>
+                <article><strong>Барыга</strong><span>За 90 бодряков находит клиента. Клиентского лимита накопления нет: бот продолжает работу и отправляет весь готовый запас указанному варщику.</span></article>
+                <article><strong>Смотрящий</strong><span>За 50 бодряков раскрывает входящее предложение или ведёт расследование на 90 действий. Настоящую роль цели сервер не показывает, поэтому догадки чередуются.</span></article>
+                <article><strong>Награда</strong><span>Базовый состав сделки задаёт сервер по уровню события: новые тиры открываются на 1, 10, 20 и 30 уровнях. Подтверждённого множителя за накопленное количество в активной логике клиента нет.</span></article>
+                <article><strong>Предложения и смена роли</strong><span>Пока одно предложение ждёт партнёра, новые партии продолжают готовиться. После принятия бот отправляет накопившийся запас. Смена роли выполняется только после безопасного завершения текущего цикла.</span></article>
+              </div>
+              <div id="lets-cook-lockers" class="event-locker-grid"></div>
+              <div id="lets-cook-ranking" class="event-ranking"></div>
+            </section>
+            </div>
+          </details>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="friends">
+          <div class="panel-grid friends-dashboard-layout">
+            <section class="card full-span friends-overview-card friends-section-panel" data-friends-section="friends">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ДРУЗЬЯ</p>
+                  <h2>Обзор</h2>
+                  <p class="card-subtitle">Текущий список друзей и готовность к массовым действиям.</p>
+                </div>
+                <button id="friends-summary-refresh-btn" class="text-button" type="button">Обновить</button>
+              </div>
+              <div id="friends-action-summary" class="stats-grid friends-summary"></div>
+              <div id="friends-batch-progress" class="friends-batch-progress" data-friends-batch-progress aria-live="polite"></div>
+            </section>
+
+            <section class="card control-card friends-action-card friends-section-panel" data-friends-section="friends">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ВЗАИМОДЕЙСТВИЯ</p>
+                  <h2>Действие с друзьями</h2>
+                  <p class="card-subtitle">Выберите действие и сколько друзей обработать.</p>
+                </div>
+              </div>
+
+              <div class="field-grid friends-primary-fields">
+                <label class="field">
+                  <span>Действие</span>
+                  <select id="friends-action-type">
+                    <option value="UpgradeBiceps">Прокачать бицепс</option>
+                    <option value="Fight">Подраться</option>
+                    <option value="Harknut">Харкнуть</option>
+                    <option value="TossDroj">Подкинуть дрожжи</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>Количество друзей</span>
+                  <input id="friends-action-count" type="number" min="1" value="100">
+                </label>
+              </div>
+              <p id="friends-action-note" class="inline-note">Выберите действие, чтобы увидеть правила выбора целей и повторов.</p>
+
+              <details class="inline-settings">
+                <summary>Скорость выполнения</summary>
+                <div class="inline-settings-body">
+                  <label class="field">
+                    <span>Дополнительная задержка, мс</span>
+                    <input id="friends-action-delay" type="number" min="0" value="0">
+                  </label>
+                  <p class="inline-note">Базовый безопасный интервал уже применяется автоматически.</p>
+                </div>
+              </details>
+
+              <button id="friends-action-btn" class="action-button friends-primary-action">Выполнить действие</button>
+            </section>
+
+            <section class="card control-card friends-discovery-card friends-section-panel" data-friends-section="friends">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ПОПОЛНЕНИЕ</p>
+                  <h2>Новые друзья</h2>
+                  <p class="card-subtitle">Найдите игроков в выбранных источниках и отправьте приглашения.</p>
+                </div>
+              </div>
+
+              <div class="field-grid friends-primary-fields">
+                <label class="field">
+                  <span>ID из каждого источника</span>
+                  <input id="friends-collect-limit" type="number" min="1" value="100">
+                </label>
+                <label class="field">
+                  <span>Размер пачки приглашений</span>
+                  <input id="friends-invite-max" type="number" min="1" value="50">
+                </label>
+              </div>
+              <div class="source-picks" id="friends-source-picks"></div>
+
+              <div class="toggle-row">
+                <label class="toggle">
+                  <input id="friends-exclude-self" type="checkbox" checked>
+                  <span>Исключить себя</span>
+                </label>
+                <label class="toggle">
+                  <input id="friends-auto-accept" type="checkbox">
+                  <span>Автоприём заявок</span>
+                </label>
+              </div>
+
+              <details class="inline-settings" open>
+                <summary>Условия отбора</summary>
+                <div class="inline-settings-body">
+                  <div class="field-grid friends-primary-fields">
+                    <label class="field">
+                      <span>Минимум талантов</span>
+                      <select id="friends-min-talents">
+                        <option value="">без фильтра</option>
+                        <option value="10">10 талантов</option>
+                        <option value="30">30 талантов</option>
+                        <option value="50">50 талантов</option>
+                        <option value="75">75 талантов</option>
+                        <option value="100">100 талантов</option>
+                        <option value="150">150 талантов</option>
+                        <option value="200">200 талантов</option>
+                        <option value="300">300 талантов</option>
+                        <option value="400">400 талантов</option>
+                        <option value="500">500 талантов</option>
+                        <option value="600">600 талантов</option>
+                        <option value="700">700 талантов</option>
+                        <option value="777">777 талантов</option>
+                        <option value="888">888 талантов</option>
+                      </select>
+                    </label>
+                    <label class="field">
+                      <span>Недельный урон больше</span>
+                      <input id="friends-min-weekly-damage" type="number" min="0" placeholder="без фильтра">
+                    </label>
+                    <label class="field">
+                      <span>Размер пачки чистки</span>
+                      <input id="friends-cleanup-max" type="number" min="1" value="50">
+                    </label>
+                  </div>
+                  <p class="inline-note">Одинаковые пороги действуют для входящих заявок и текущих друзей. Входящие, которые не проходят хотя бы один выбранный фильтр, будут отклонены.</p>
+                </div>
+              </details>
+
+              <details class="inline-settings">
+                <summary>Дополнительные настройки</summary>
+                <div class="inline-settings-body">
+                  <label class="field">
+                    <span>Дополнительная задержка, мс</span>
+                    <input id="friends-invite-delay" type="number" min="0" value="0">
+                  </label>
+                  <label class="toggle">
+                    <input id="friends-reset-progress" type="checkbox">
+                    <span>Начать список приглашений заново</span>
+                  </label>
+                </div>
+              </details>
+
+              <div class="button-row">
+                <button id="friends-collect-btn" class="action-button">Найти игроков</button>
+                <button id="friends-invite-btn" class="action-button action-button-alt">Пригласить</button>
+                <button id="friends-accept-btn" class="text-button" type="button">Обработать входящие</button>
+                <button id="friends-cleanup-btn" class="text-button" type="button">Почистить друзей</button>
+              </div>
+
+              <div id="friends-summary" class="stats-grid friends-summary"></div>
+            </section>
+
+            <section class="card full-span friends-damage-section-card friends-section-panel" data-friends-section="damage" hidden>
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">АНАЛИТИКА</p>
+                  <h2>Статистика урона</h2>
+                  <p class="card-subtitle">Сравнение за час, день и неделю — среди всех игроков, друзей и участников бригады.</p>
+                </div>
+                <div class="card-head-actions">
+                  <div id="friends-damage-scope" class="friends-damage-scope" role="tablist" aria-label="Область статистики урона">
+                    <button class="friends-damage-scope-button is-active" type="button" role="tab" aria-selected="true" data-damage-scope="overall">Общий рейтинг</button>
+                    <button class="friends-damage-scope-button" type="button" role="tab" aria-selected="false" data-damage-scope="guild">Бригада</button>
+                  </div>
+                  <button id="friends-damage-refresh-btn" class="text-button" type="button">Обновить</button>
+                </div>
+              </div>
+              <p id="friends-damage-note" class="friends-damage-note">Отчёты об уроне ещё не загружены.</p>
+              <div id="friends-damage-batch-progress" class="friends-batch-progress friends-damage-batch-progress" data-friends-batch-progress aria-live="polite"></div>
+              <div id="friends-damage-summary" class="stats-grid friends-summary friends-damage-summary"></div>
+              <div id="friends-damage-panels" class="friends-damage-grid"></div>
+            </section>
+
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="system">
+          <div class="panel-grid system-dashboard-layout">
+            <section class="card auth-card full-span collapsible-card is-collapsed">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">АККАУНТ</p>
+                  <h2>Аккаунт и авторизация</h2>
+                  <p class="card-subtitle">Выбери сохранённый аккаунт или войди по InitData либо токенам.</p>
+                </div>
+              </div>
+              <div class="field-grid">
+                <label class="field field-wide">
+                  <span>Сохранённый аккаунт</span>
+                  <select id="auth-account-select" aria-describedby="auth-accounts-note"></select>
+                </label>
+              </div>
+              <div class="button-row">
+                <button id="auth-switch-saved-btn" class="action-button">Переключиться</button>
+                <button id="auth-status-btn" class="action-button action-button-ghost">Обновить список и статус</button>
+              </div>
+              <p id="auth-accounts-note" class="inline-note">Загружаем сохранённые аккаунты…</p>
+              <div class="auth-methods" data-auth-methods>
+                <div class="auth-method-tabs" role="tablist" aria-label="Способ входа">
+                  <button id="auth-initdata-tab" class="auth-method-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-initdata-panel" tabindex="0">По InitData</button>
+                  <button id="auth-tokens-tab" class="auth-method-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-tokens-panel" tabindex="-1">По токенам</button>
+                </div>
+                <div id="auth-initdata-panel" class="auth-method-panel" role="tabpanel" aria-labelledby="auth-initdata-tab">
+                  <div class="field-grid">
+                    <label class="field field-wide">
+                      <span>Добавить или обновить аккаунт по InitData</span>
+                      <textarea id="auth-initdata" rows="3" autocomplete="off" spellcheck="false" placeholder="query_id=...&user=...&auth_date=...&hash=..."></textarea>
+                    </label>
+                  </div>
+                  <div class="button-row">
+                    <button id="auth-login-btn" class="action-button action-button-alt">Сохранить и войти</button>
+                  </div>
+                </div>
+                <div id="auth-tokens-panel" class="auth-method-panel" role="tabpanel" aria-labelledby="auth-tokens-tab" hidden>
+                  <div class="field-grid">
+                    <label class="field field-wide">
+                      <span>Access token</span>
+                      <input id="auth-access-token" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь accessToken">
+                    </label>
+                    <label class="field field-wide">
+                      <span>Refresh token <small>(необязательно)</small></span>
+                      <input id="auth-refresh-token" type="password" autocomplete="off" spellcheck="false" placeholder="Вставь refreshToken для автообновления">
+                    </label>
+                  </div>
+                  <div class="button-row">
+                    <button id="auth-token-login-btn" class="action-button action-button-alt">Проверить и войти по токенам</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="auth-summary" class="stats-grid"></div>
+              <p id="auth-status-note" class="inline-note">Статус авторизации неизвестен.</p>
+            </section>
+
+            <section class="card system-card full-span danger-zone-card">
+              <div class="danger-zone-content">
+                <div>
+                  <p class="card-kicker">ЗАВЕРШЕНИЕ РАБОТЫ</p>
+                  <h2>Остановить Pbot</h2>
+                  <p class="card-subtitle">Локальный сервер и вся активная автоматика будут остановлены.</p>
+                </div>
+                <button id="server-shutdown-btn" type="button" class="action-button action-button-danger">Остановить и выйти</button>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <section class="tab-panel" data-panel="about">
+          <div class="panel-grid about-dashboard-layout">
+            <section class="card full-span about-header-card">
+              <div
+                class="about-support-icons"
+                role="img"
+                aria-label="Подогрев, пацанская, блатная и авторитетная посылки"
+              >
+                <span title="Подогрев"><img src="/assets/game-icons/extracted/png-4x/podogrev-icon-4x.png" alt=""></span>
+                <span title="Пацанская посылка"><img src="/assets/game-icons/extracted/png-4x/patsanskaya-posylka-4x.png" alt=""></span>
+                <span title="Блатная посылка"><img src="/assets/game-icons/extracted/png-4x/blatnaya-posylka-4x.png" alt=""></span>
+                <span title="Авторитетная посылка"><img src="/assets/game-icons/extracted/png-4x/avtoritetnaya-posylka-4x.png" alt=""></span>
+              </div>
+              <h2>Ссылки и поддержка</h2>
+              <div class="about-resource-links" aria-label="Ссылки и поддержка">
+                <a href="https://boosty.to/pbot" target="_blank" rel="noopener noreferrer">Boosty <span aria-hidden="true">↗</span></a>
+                <a href="https://t.me/pbot_tyraga" target="_blank" rel="noopener noreferrer">Telegram <span aria-hidden="true">↗</span></a>
+                <a href="https://www.youtube.com/@pbot_prison" target="_blank" rel="noopener noreferrer">YouTube <span aria-hidden="true">↗</span></a>
+              </div>
+            </section>
+
+            <section class="card full-span about-sponsors-card">
+              <div class="about-sponsors-head">
+                <div class="about-sponsors-title">
+                  <h2>Подогрели проект</h2>
+                  <details class="about-support-help">
+                    <summary aria-label="Как попасть в список тех, кто подогрел проект">
+                      <span aria-hidden="true">?</span>
+                    </summary>
+                    <div class="about-support-help-body">
+                      <strong>Как попасть в список</strong>
+                      <ol>
+                        <li>Подпишись на Boosty на уровень поддержки, в который входит размещение в этом списке.</li>
+                        <li>Через Boosty вступи в закрытый Telegram-чат. Аккаунт, с которого ты вступишь, будет добавлен в список.</li>
+                        <li>Если игровой аккаунт не привязан к Telegram, отправь его ID в личные сообщения на Boosty — добавлю вручную.</li>
+                      </ol>
+                    </div>
+                  </details>
+                </div>
+                <div id="about-sponsor-filters" class="collection-category-nav about-sponsor-filters" aria-label="Фильтр тех, кто подогрел проект"></div>
+              </div>
+              <div id="about-sponsors-list" class="about-sponsors-list" aria-live="polite"></div>
+            </section>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <button
+      id="journal-toggle"
+      class="journal-toggle"
+      type="button"
+      aria-controls="journal-drawer"
+      aria-expanded="false"
+      hidden
+    >
+      <svg class="journal-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M5.5 4.5h9M5.5 8h9M5.5 11.5h9M5.5 15h6"></path>
+      </svg>
+      <span>Журнал</span>
+      <span id="journal-count" class="journal-count">0</span>
+    </button>
+    <div id="journal-backdrop" class="journal-backdrop" aria-hidden="true"></div>
+    <aside
+      id="journal-drawer"
+      class="journal-drawer"
+      aria-labelledby="journal-title"
+      aria-hidden="true"
+      inert
+    >
+      <header class="journal-drawer-head">
+        <div>
+          <span class="section-kicker">ИСТОРИЯ ДЕЙСТВИЙ</span>
+          <h2 id="journal-title">Журнал</h2>
+          <p id="journal-context-note">Показываем события текущей вкладки</p>
+        </div>
+        <button id="journal-close" class="journal-close" type="button" aria-label="Закрыть журнал">×</button>
+      </header>
+      <div class="journal-toolbar">
+        <label class="journal-filter-field">
+          <span>Источник</span>
+          <select id="journal-source-filter">
+            <option id="journal-current-source-option" value="current">Текущая вкладка · Боссы</option>
+            <option value="all">Все разделы</option>
+            <option value="system">Система</option>
+            <option value="bosses">Боссы</option>
+            <option value="prison">Тюрьма</option>
+            <option value="friends">Друзья</option>
+            <option value="misc">Разное</option>
+            <option value="events">События</option>
+          </select>
+        </label>
+        <label class="journal-filter-field">
+          <span>Тип события</span>
+          <select id="journal-kind-filter">
+            <option value="all">Все события</option>
+            <option value="action">Действия</option>
+            <option value="reward">Награды</option>
+            <option value="error">Ошибки</option>
+          </select>
+        </label>
+        <label class="journal-search-field">
+          <span class="sr-only">Поиск в журнале</span>
+          <input id="journal-search" type="search" autocomplete="off" placeholder="Поиск по журналу…">
+        </label>
+        <button id="journal-clear-btn" class="text-button journal-clear-button" type="button">Очистить видимые</button>
+      </div>
+      <div class="journal-drawer-body">
+        <div id="journal-list" class="journal-list" aria-live="polite"></div>
+      </div>
+    </aside>
+
+    <dialog id="damage-calculator-dialog" class="damage-calculator-dialog">
+      <article class="damage-calculator-card card">
+        <header class="damage-calculator-header">
+          <div>
+            <p class="card-kicker">ПЛАН БОЯ</p>
+            <h2>Калькулятор урона</h2>
+            <p class="card-subtitle">Акция, шанс крита и нужный запас оружия — в одном расчёте.</p>
+          </div>
+          <button
+            id="damage-calculator-close-btn"
+            class="damage-calculator-close-button"
+            type="button"
+            aria-label="Закрыть калькулятор"
+          >×</button>
+        </header>
+
+        <div class="damage-calculator-layout">
+          <section class="damage-calculator-config" aria-label="Параметры расчёта">
+            <div class="damage-calculator-section">
+              <div class="damage-calculator-section-title">
+                <span>1</span>
+                <div>
+                  <strong>Оружие</strong>
+                  <small>Урон и крит берутся из текущей сессии</small>
+                </div>
+              </div>
+              <div id="damage-calculator-weapons" class="damage-calculator-weapons" role="radiogroup" aria-label="Оружие"></div>
+            </div>
+
+            <div class="damage-calculator-section">
+              <div class="damage-calculator-section-title">
+                <span>2</span>
+                <div>
+                  <strong>Акция на урон</strong>
+                  <small>+350% означает урон ×4,5</small>
+                </div>
+              </div>
+              <div id="damage-calculator-action-presets" class="damage-calculator-presets" aria-label="Быстрый процент акции">
+                <button type="button" data-action-percent="0">Нет</button>
+                <button type="button" data-action-percent="150">+150%</button>
+                <button type="button" data-action-percent="250">+250%</button>
+                <button type="button" data-action-percent="350">+350%</button>
+                <button type="button" data-action-percent="500">+500%</button>
+              </div>
+              <label class="field damage-calculator-percent-field">
+                <span>Свой процент</span>
+                <span class="damage-calculator-input-suffix">
+                  <input id="damage-calculator-action-percent" type="number" min="0" max="10000" step="1" value="0" inputmode="numeric">
+                  <span>%</span>
+                </span>
+              </label>
+            </div>
+
+            <div class="damage-calculator-section">
+              <div class="damage-calculator-section-title">
+                <span>3</span>
+                <div>
+                  <strong>Критический шанс</strong>
+                  <small id="damage-calculator-crit-summary">Загружаю данные оружия…</small>
+                </div>
+              </div>
+              <div id="damage-calculator-buffs" class="damage-calculator-buffs" aria-live="polite">
+                <span class="damage-calculator-muted">Загружаю усиления игры…</span>
+              </div>
+            </div>
+          </section>
+
+          <section class="damage-calculator-output" aria-label="Результат расчёта">
+            <div class="damage-calculator-mode-switch" role="tablist" aria-label="Тип расчёта">
+              <button type="button" role="tab" aria-selected="true" class="is-active" data-calculator-mode="quantity">Сколько нанесу</button>
+              <button type="button" role="tab" aria-selected="false" data-calculator-mode="target">Сколько нужно</button>
+            </div>
+
+            <div id="damage-calculator-quantity-panel" class="damage-calculator-mode-panel">
+              <label class="field">
+                <span>Количество оружия</span>
+                <input id="damage-calculator-weapon-count" type="number" min="0" step="1" value="1" inputmode="numeric">
+              </label>
+              <p class="damage-calculator-helper">Покажу урон без единого крита, математическое ожидание и максимум.</p>
+            </div>
+
+            <div id="damage-calculator-target-panel" class="damage-calculator-mode-panel" hidden>
+              <div id="damage-calculator-target-kinds" class="damage-calculator-target-kinds" role="tablist" aria-label="Источник цели">
+                <button type="button" role="tab" data-target-kind="active">Текущий бой</button>
+                <button type="button" role="tab" class="is-active" data-target-kind="boss">Босс</button>
+                <button type="button" role="tab" data-target-kind="custom">Свой урон</button>
+              </div>
+
+              <div id="damage-calculator-active-target" class="damage-calculator-target-source" hidden></div>
+
+              <div id="damage-calculator-boss-target" class="damage-calculator-target-source">
+                <label class="field field-wide">
+                  <span>Босс · пацанский HP</span>
+                  <select id="damage-calculator-boss-select"></select>
+                </label>
+              </div>
+
+              <div id="damage-calculator-custom-target" class="damage-calculator-target-source" hidden>
+                <label class="field">
+                  <span>Нужно нанести урона</span>
+                  <input id="damage-calculator-target-damage" type="number" min="0" step="1" value="1000000" inputmode="numeric">
+                </label>
+              </div>
+            </div>
+
+            <details class="inline-settings talent-calculator-settings">
+              <summary>План талантов</summary>
+              <div class="inline-settings-body">
+                <div class="field-grid">
+                  <label class="field">
+                    <span>Целевое число талантов</span>
+                    <input id="talent-calculator-target-points" type="number" min="0" max="999" value="0">
+                  </label>
+                  <label class="field">
+                    <span>Будущий урон</span>
+                    <input id="talent-calculator-damage" type="number" min="0" value="0">
+                  </label>
+                </div>
+                <button id="talent-calculator-refresh" class="action-button action-button-ghost" type="button">Рассчитать таланты</button>
+                <div id="talent-calculator-result" class="stats-grid stats-grid-tight"></div>
+              </div>
+            </details>
+
+            <div id="damage-calculator-result" class="damage-calculator-result" aria-live="polite"></div>
+          </section>
+        </div>
+
+        <footer class="damage-calculator-footer">
+          <span><i class="damage-calculator-legend-dot is-guaranteed"></i> Гарантированно — если ни один удар не кританёт.</span>
+          <span><i class="damage-calculator-legend-dot is-expected"></i> Ожидаемо — среднее при двойном уроне крита.</span>
+        </footer>
+      </article>
+    </dialog>
+
+    <dialog id="boss-attack-plan-dialog" class="boss-attack-plan-dialog">
+      <article class="boss-attack-plan-card card">
+        <header class="boss-attack-plan-header">
+          <div>
+            <p class="card-kicker">РУЧНОЙ РЕЖИМ</p>
+            <h2>Очередь ударов</h2>
+            <p class="card-subtitle">Соберите свою последовательность ударов и заранее проверьте расход.</p>
+          </div>
+          <button
+            id="boss-attack-plan-close-btn"
+            class="boss-attack-plan-close-button"
+            type="button"
+            aria-label="Закрыть очередь ударов"
+          >×</button>
+        </header>
+
+        <div class="attack-composer">
+          <div class="field-grid attack-picker-grid">
+            <label class="field">
+              <span>Удар или оружие</span>
+              <select id="boss-attack-select"></select>
+            </label>
+            <label class="field">
+              <span>Повторов</span>
+              <input id="boss-attack-count" type="number" min="1" value="1">
+            </label>
+          </div>
+          <button id="boss-queue-add" class="action-button" type="button">Добавить</button>
+          <button id="boss-combo-open-btn" class="action-button action-button-ghost" type="button" hidden>Комбо</button>
+        </div>
+
+        <div class="attack-plan-layout">
+          <div class="table-wrap boss-attack-table-wrap">
+            <table class="compact-table boss-attack-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Действие</th>
+                  <th>Повторов</th>
+                  <th>Расход</th>
+                  <th>Урон</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="boss-attack-body"></tbody>
+            </table>
+          </div>
+          <aside class="attack-plan-summary" aria-label="Итоги очереди">
+            <div id="boss-attack-summary" class="stats-grid stats-grid-tight"></div>
+            <div id="boss-cost-summary" class="stats-grid stats-grid-tight"></div>
+          </aside>
+        </div>
+
+        <details class="inline-settings attack-raw-settings">
+          <summary>Техническая последовательность</summary>
+          <div class="inline-settings-body">
+            <label class="field">
+              <span>Коды действий</span>
+              <input id="boss-types" type="text" value="punchChest,kickBalls,pokeEyes,kneeEar">
+            </label>
+          </div>
+        </details>
+
+        <footer class="boss-attack-plan-footer">
+          <button id="boss-hit-btn" class="action-button action-button-alt">Пробить по очереди</button>
+          <button id="boss-queue-clear" class="text-button text-button-danger" type="button">Очистить очередь</button>
+        </footer>
+      </article>
+    </dialog>
+
+    <dialog id="boss-combo-dialog" class="combo-dialog">
+      <article class="combo-dialog-card card">
+        <div class="card-head">
+          <h2>Шаблон комбо</h2>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>Босс</span>
+            <select id="boss-combo-template-boss"></select>
+          </label>
+          <label class="field">
+            <span>Режим комбо</span>
+            <select id="boss-combo-template-mode"></select>
+          </label>
+          <label class="field field-wide">
+            <span>Список комбо</span>
+            <textarea
+              id="boss-combo-template-text"
+              rows="12"
+              placeholder="1. ear&#10;2. eyes&#10;3. ear&#10;4. poison&#10;..."
+            ></textarea>
+          </label>
+          <label class="combo-needle-toggle field-wide">
+            <input id="boss-combo-template-finish-with-needle" type="checkbox">
+            <span class="combo-needle-toggle-copy">
+              <strong>Добить Иглой</strong>
+              <small>После комбо использовать урон общака, если он доступен.</small>
+            </span>
+          </label>
+        </div>
+
+        <p id="boss-combo-template-note" class="inline-note">
+          Шаблоны сбрасываются ежедневно в 00:00 по Москве.
+        </p>
+        <div class="button-row">
+          <button id="boss-combo-template-save" type="button" class="action-button">Сохранить и применить</button>
+          <button id="boss-combo-template-load" type="button" class="action-button action-button-alt">Загрузить</button>
+          <button id="boss-combo-template-delete" type="button" class="action-button action-button-danger">Удалить</button>
+          <button id="boss-combo-template-close" type="button" class="action-button action-button-ghost">Закрыть</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="boss-combo-offer-dialog" class="boss-combo-offer-dialog">
+      <article class="boss-combo-offer-card card">
+        <p class="card-kicker">КОМБО ДЛЯ ОЧЕРЕДИ</p>
+        <h2>Настроить комбо?</h2>
+        <p id="boss-combo-offer-context" class="card-subtitle"></p>
+        <p class="inline-note">
+          Можно сохранить один или несколько режимов в редакторе. Если есть авторитетное комбо,
+          очередь выберет его в первую очередь.
+        </p>
+        <div class="button-row">
+          <button id="boss-combo-offer-configure" type="button" class="action-button">Ввести комбо</button>
+          <button id="boss-combo-offer-skip" type="button" class="action-button action-button-alt">Пропустить</button>
+          <button id="boss-combo-offer-skip-all" type="button" class="action-button action-button-ghost">Пропустить все</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="boss-solo-queue-warning-dialog" class="solo-queue-warning-dialog">
+      <article class="solo-queue-warning-card card">
+        <p class="card-kicker">ПРОВЕРЬ РЕЖИМ БОЯ</p>
+        <h2>Крупный босс в режиме «в одного»</h2>
+        <p class="card-subtitle">
+          Этот бой запускается «в одного». Без валюты для выхода можно застрять в бою до 9 часов.
+        </p>
+        <ul id="boss-solo-queue-warning-list" class="solo-queue-warning-list"></ul>
+        <label class="toggle solo-queue-warning-toggle">
+          <input id="boss-solo-queue-warning-suppress" type="checkbox">
+          <span>Больше сегодня не показывать</span>
+        </label>
+        <div class="button-row">
+          <button id="boss-solo-queue-warning-confirm" type="button" class="action-button action-button-danger">Всё равно добавить</button>
+          <button id="boss-solo-queue-warning-cancel" type="button" class="action-button action-button-ghost">Отмена</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="boss-surrender-dialog" class="solo-queue-warning-dialog boss-surrender-dialog">
+      <article class="solo-queue-warning-card boss-surrender-card card">
+        <p class="card-kicker">ПЛАТНЫЙ ВЫХОД</p>
+        <h2>Выйти из активного боя?</h2>
+        <p id="boss-surrender-context" class="card-subtitle">
+          Бой завершится досрочно, а игра спишет 2 мыла. Это действие нельзя отменить.
+        </p>
+        <div class="button-row">
+          <button id="boss-surrender-confirm" type="button" class="action-button action-button-danger">Да, выйти за 2 мыла</button>
+          <button id="boss-surrender-cancel" type="button" class="action-button action-button-ghost">Остаться в бою</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="boss-weapon-purchase-dialog" class="solo-queue-warning-dialog boss-weapon-purchase-dialog">
+      <article class="solo-queue-warning-card boss-weapon-purchase-card card">
+        <p class="card-kicker">ПОКУПКА ОРУЖИЯ</p>
+        <h2>Подтвердить покупку?</h2>
+        <p id="boss-weapon-purchase-context" class="card-subtitle">
+          Игра спишет рубли сразу после подтверждения.
+        </p>
+        <dl class="boss-weapon-purchase-details">
+          <div>
+            <dt>Оружие</dt>
+            <dd id="boss-weapon-purchase-name">—</dd>
+          </div>
+          <div>
+            <dt>Количество</dt>
+            <dd id="boss-weapon-purchase-count">—</dd>
+          </div>
+          <div>
+            <dt>Цена</dt>
+            <dd id="boss-weapon-purchase-unit-price">—</dd>
+          </div>
+          <div>
+            <dt>Итого</dt>
+            <dd id="boss-weapon-purchase-total">—</dd>
+          </div>
+        </dl>
+        <div class="button-row">
+          <button id="boss-weapon-purchase-confirm" type="button" class="action-button action-button-danger">Купить</button>
+          <button id="boss-weapon-purchase-cancel" type="button" class="action-button action-button-ghost">Отмена</button>
+        </div>
+      </article>
+    </dialog>
+
+    <dialog id="lets-cook-soap-warning-dialog" class="solo-queue-warning-dialog">
+      <article class="solo-queue-warning-card card">
+        <p class="card-kicker">ПЛАТНАЯ ЭНЕРГИЯ</p>
+        <h2>Разрешить трату мыла?</h2>
+        <p class="card-subtitle">
+          Когда бодряки закончатся, бот будет автоматически покупать 100 бодряков за 8 мыла и продолжать работу.
+          Покупка может повторяться всё время, пока настройка включена.
+        </p>
+        <div class="button-row">
+          <button id="lets-cook-soap-warning-confirm" type="button" class="action-button action-button-danger">Да, разрешить</button>
+          <button id="lets-cook-soap-warning-cancel" type="button" class="action-button action-button-ghost">Нет, оставить выключенным</button>
+        </div>
+      </article>
+    </dialog>
+
+    <script src="/damage-calculator.js"></script>
+    <script src="/app.js?v=20260906-zaruba-spending"></script>
+  </body>
+</html>
