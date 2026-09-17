@@ -42,9 +42,11 @@ test("Zaruba is a first-class responsive tab with automatic refresh and concise 
   assert.match(html, /Награды, Тюрьмы и мастера/);
   assert.match(html, /Забирает награды и добавляет задания в очередь/);
   assert.doesNotMatch(html, /id="zaruba-auto-(?:claim|enqueue)"/);
-  assert.equal((html.match(/<h2>Состояние и прогресс<\/h2>/g) || []).length, 1);
+  assert.equal((html.match(/<h2>Прогресс и режим<\/h2>/g) || []).length, 1);
   assert.equal((html.match(/<h3>Правила выполнения<\/h3>/g) || []).length, 1);
-  assert.doesNotMatch(html, /zaruba-automation-card/);
+  // Active objectives precede mode selection and automation in reading order.
+  assert.ok(html.indexOf('card full-span zaruba-task-card') < html.indexOf('card full-span zaruba-overview-card'));
+  assert.ok(html.indexOf('card full-span zaruba-overview-card') < html.indexOf('card full-span zaruba-automation-card'));
   assert.match(app, /expectedStateVersion/);
   assert.match(styles, /\.zaruba-mode-grid/);
   assert.match(styles, /\.zaruba-task-state\s*\{[^}]*grid-template-columns:\s*repeat\(4,/s);

@@ -1,8 +1,9 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { getInstancePaths } = require("./ui-instance");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
-const ARTIFACTS_DIR = path.join(ROOT_DIR, "artifacts");
+const { artifactsDir: ARTIFACTS_DIR } = getInstancePaths(ROOT_DIR);
 
 function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, "-");

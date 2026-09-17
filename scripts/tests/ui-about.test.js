@@ -190,9 +190,9 @@ test("supporter cards expose tier styling and real friendship states", () => {
 
 test("supporter directory uses the public ID-only source and a twelve-hour cache", () => {
   assert.match(serverSource, /pathname === "\/api\/about\/sponsors"/);
-  assert.match(serverSource, /getSupportersDirectory: initializeSupportersDirectory/);
-  assert.match(serverSource, /await initializeSupportersDirectory\(\{ forceRefresh: true \}\)/);
   assert.match(serverSource, /await getSponsorsDirectory\(\)/);
+  assert.match(serviceSource, /getSupportersDirectory: loadSupportersDirectory/);
+  assert.match(serviceSource, /await loadSupportersDirectory\(\)/);
   assert.doesNotMatch(serviceSource, /ui\/data\/sponsors\.json/);
   assert.match(serviceSource, /async function getSponsorsDirectory/);
   assert.match(serviceSource, /client\.players\.view\(userId\)/);

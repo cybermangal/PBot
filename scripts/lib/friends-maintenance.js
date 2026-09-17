@@ -143,8 +143,8 @@ function normalizeFriendCandidateRecord(item, extra = {}) {
     ),
     nickname: pickString(record.nickname, record.nick, record.name, extra.nickname),
     photoUrl: pickString(record.photoUrl, record.avatarUrl, record.avatar, extra.photoUrl),
-    isIncoming: record.isIncoming === undefined ? extra.isIncoming ?? true : Boolean(record.isIncoming),
-    isPending: record.isPending === undefined ? extra.isPending ?? null : Boolean(record.isPending),
+    isIncoming: toBool(record.isIncoming, extra.isIncoming ?? true),
+    isPending: toBool(record.isPending, extra.isPending ?? null),
     talentsCount: pickNumeric(
       record.talentsCount,
       record.talentCount,
@@ -186,6 +186,9 @@ function extractListPayload(payload) {
       return payload[key];
     }
   }
+  if (payload.data && typeof payload.data === "object") {
+    return extractListPayload(payload.data);
+  }
   return [];
 }
 
@@ -215,6 +218,9 @@ function normalizeIncomingFriendRequestRecords(payload, selfUserId = null) {
 
 function normalizeWeeklyDamageRows(payload) {
   const root = payload && typeof payload === "object" ? payload : {};
+  if (root.data && typeof root.data === "object" && !Array.isArray(root.data)) {
+    return normalizeWeeklyDamageRows(root.data);
+  }
   const rows = Array.isArray(root.top)
     ? root.top
     : Array.isArray(root.data)
@@ -235,7 +241,7 @@ function normalizeWeeklyDamageRows(payload) {
       userId,
       nickname: pickString(item.nickname, item.nick),
       photoUrl: pickString(item.photoUrl, item.avatarUrl),
-      weeklyDamage: pickNumeric(item.damage, item.weeklyDamage, item.metricValue) ?? 0,
+      weeklyDamage: asNonNegativeNumber(pickNumeric(item.damage, item.weeklyDamage, item.metricValue)),
       weeklyRank: asPositiveInt(item.rank, null),
     });
   }
@@ -245,10 +251,13 @@ function normalizeWeeklyDamageRows(payload) {
 
 async function loadWeeklyDamageMap(client, limit = DEFAULT_WEEKLY_DAMAGE_LIMIT) {
   const response = await client.weekly.top(limit);
-  if (!response || !response.ok) {
+  if (!response || !response.ok || response.data?.success === false) {
     throw new Error(`Could not load weekly damage top: HTTP ${response ? response.status : "unknown"}`);
   }
-  const rows = normalizeWeeklyDamageRows(response.data);
+  const rows = normalizeWeeklyDamageRows(response.data).slice(0, limit);
+  if (rows.length === 0) {
+    throw new Error("Weekly damage ranking is empty or unavailable; no targets were selected.");
+  }
   return new Map(rows.map((row) => [row.userId, row]));
 }
 
@@ -262,7 +271,7 @@ function attachWeeklyDamage(candidates, weeklyDamageByUserId) {
     if (!weekly) {
       return {
         ...candidate,
-        weeklyDamage: 0,
+        weeklyDamage: null,
         weeklyRank: null,
         weeklyDamageListed: false,
       };
@@ -304,16 +313,12 @@ function evaluateFriendCriteria(candidate, criteria) {
   }
 
   if (criteria.minWeeklyDamage !== null) {
-    const actual = candidate.weeklyDamage === null || candidate.weeklyDamage === undefined
-      ? 0
-      : Number(candidate.weeklyDamage);
-    addKnown(
-      "weeklyDamage",
-      Number.isFinite(actual) ? actual : 0,
-      criteria.minWeeklyDamage,
-      Number.isFinite(actual) && actual > criteria.minWeeklyDamage,
-      ">",
-    );
+    const actual = asNonNegativeNumber(candidate.weeklyDamage);
+    if (actual === null) {
+      addUnknown("weeklyDamage", criteria.minWeeklyDamage, ">=");
+    } else {
+      addKnown("weeklyDamage", actual, criteria.minWeeklyDamage, actual >= criteria.minWeeklyDamage, ">=");
+    }
   }
 
   if (criteria.minTalentAchievement !== null) {
@@ -353,6 +358,7 @@ module.exports = {
   asPositiveInt,
   attachWeeklyDamage,
   evaluateFriendCriteria,
+  extractListPayload,
   loadWeeklyDamageMap,
   normalizeCriteriaOptions,
   normalizeFriendCandidateRecord,

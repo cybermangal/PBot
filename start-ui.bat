@@ -20,6 +20,7 @@ echo [start-ui] Run 01-install-requirements.bat first, then try again.
 goto :fail
 
 :run
+echo [start-ui] Starting Pbot. Please keep this window open.
 "%NODE_EXE%" scripts\ui-server.js %*
 set "PBOT_EXIT_CODE=%errorlevel%"
 if "%PBOT_EXIT_CODE%"=="0" exit /b 0

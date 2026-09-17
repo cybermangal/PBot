@@ -921,8 +921,16 @@ async function createApiClient(options = {}) {
       all(options = {}) {
         return request("GET", "/api/player/business/all", options);
       },
-      collect() {
+      upgrade(businessId, prisonId, options = {}) {
+        return request("POST", "/api/player/business/upgrade", {
+          ...options,
+          query: { businessId, prisonId },
+          rateLimitRetries: 0,
+        });
+      },
+      collect(options = {}) {
         return request("POST", "/api/player/business/collect", {
+          ...options,
           json: {},
         });
       },
@@ -972,8 +980,8 @@ async function createApiClient(options = {}) {
       skip(taskId) {
         return request("POST", "/api/zaruba/skip", { json: { TaskId: taskId }, rateLimitRetries: 0 });
       },
-      state() {
-        return request("GET", "/api/zaruba/state");
+      state(options = {}) {
+        return request("GET", "/api/zaruba/state", options);
       },
       wellState(options = {}) {
         return request("GET", "/api/zaruba/well/state", options);

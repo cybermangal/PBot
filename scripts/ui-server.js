@@ -1,10 +1,13 @@
+const { configureUiInstance, getInstanceInfo, getInstancePaths, listUiInstances, createInstanceLauncher } = require("./lib/ui-instance");
+const INSTANCE_PORT = configureUiInstance(process.argv.slice(2));
 const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
 const { exec } = require("node:child_process");
 const { VERBOSE_LOGGING, flushLogs, logEvent } = require("./lib/logger");
-const { getSupportersDirectory: initializeSupportersDirectory } = require("./lib/supporters-directory");
 const { getComboDirectory } = require("./lib/combo-directory");
+const { createBossAvatarStore } = require("./lib/boss-avatars");
+const bossAvatars = createBossAvatarStore({ onError: (details) => logEvent("boss.avatar_error", details) });
 
 const SLOW_UI_REQUEST_MS = Math.max(250, Number(process.env.PBOT_SLOW_UI_REQUEST_MS) || 1_000);
 
@@ -16,6 +19,7 @@ const {
   buyMissingMasterItems,
   buyMonthlyDay,
   collectBusinessProfit,
+  upgradeBusiness,
   cleanupFriends,
   collectIds,
   collectPodogrev,
@@ -69,7 +73,6 @@ const {
   initializePrisonAutomation,
   initializeVpiAutomation,
   initializeDailyToiletPaperAutomation,
-  keepAliveSavedAuthAccounts,
   loginByInitData,
   loginByTokens,
   loopBoss,
@@ -111,7 +114,8 @@ const {
 
 const ROOT_DIR = path.resolve(__dirname, "..");
 const UI_DIR = path.join(ROOT_DIR, "ui");
-const DEFAULT_PORT = 4311;
+const INSTANCE_INFO = getInstanceInfo(ROOT_DIR, INSTANCE_PORT);
+const openNextInstance = createInstanceLauncher({ rootDir: ROOT_DIR, port: INSTANCE_PORT });
 let uiRequestSequence = 0;
 const staticFileCache = new Map();
 function nextUiRequestId() {
@@ -253,13 +257,24 @@ async function loadStaticFile(filePath) {
 }
 
 async function serveStatic(request, requestPath, response) {
-  const filePath = sanitizeStaticPath(requestPath);
+  let filePath = sanitizeStaticPath(requestPath);
   if (!filePath) {
     sendJson(response, 404, { ok: false, error: "Not found" });
     return;
   }
 
   try {
+    let contentType = getContentType(filePath);
+    const bossAvatarMatch = /^\/assets\/bosses\/([1-9]\d*)\.webp$/.exec(requestPath);
+    if (bossAvatarMatch) {
+      const avatar = await bossAvatars.getAvatar(bossAvatarMatch[1]);
+      if (!avatar) {
+        sendJson(response, 404, { ok: false, error: "Boss avatar unavailable" });
+        return;
+      }
+      filePath = avatar.filePath;
+      contentType = avatar.contentType;
+    }
     const file = await loadStaticFile(filePath);
     if (request.headers["if-none-match"] === file.etag) {
       response.writeHead(304, {
@@ -271,7 +286,7 @@ async function serveStatic(request, requestPath, response) {
     }
 
     response.writeHead(200, {
-      "Content-Type": getContentType(filePath),
+      "Content-Type": contentType,
       "Cache-Control": "no-cache",
       "Content-Length": file.body.length,
       ETag: file.etag,
@@ -319,8 +334,27 @@ async function handleApi(request, response, url, requestShutdown) {
       ok: true,
       data: {
         interactionTypes: [...INTERACTION_TYPES],
+        instance: INSTANCE_INFO,
       },
     });
+    return;
+  }
+
+  if (method === "GET" && pathname === "/api/system/instances") {
+    sendJson(response, 200, { ok: true, data: await listUiInstances(ROOT_DIR, INSTANCE_PORT) });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/system/instances/open") {
+    const origin = request.headers.origin;
+    if ((origin && origin !== `http://${request.headers.host}`)
+      || request.headers["sec-fetch-site"] === "cross-site"
+      || !String(request.headers["content-type"] || "").startsWith("application/json")) {
+      sendJson(response, 403, { ok: false, error: "Открой экземпляр кнопкой в локальной панели Pbot." });
+      return;
+    }
+    const result = await openNextInstance(await readJsonBody(request));
+    sendJson(response, 200, { ok: true, data: result });
     return;
   }
 
@@ -839,6 +873,12 @@ async function handleApi(request, response, url, requestShutdown) {
     return;
   }
 
+  if (method === "POST" && pathname === "/api/player/business/upgrade") {
+    const result = await upgradeBusiness(await readJsonBody(request));
+    sendJson(response, 200, { ok: true, data: result });
+    return;
+  }
+
   if (method === "GET" && pathname === "/api/podogrev/status") {
     const result = await getPodogrevStatus(queryToOptions(url.searchParams));
     sendJson(response, 200, { ok: true, data: result });
@@ -889,20 +929,14 @@ async function initializeAuthenticatedRuntime() {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const port = Number.parseInt(String(args.port || DEFAULT_PORT), 10) || DEFAULT_PORT;
+  const port = INSTANCE_PORT;
   const host = args.host ? String(args.host) : "127.0.0.1";
   const autoOpen = !toBool(args["no-open"], false);
 
+  process.stdout.write(`[Pbot] Starting UI at http://${host}:${port}...\n`);
   logEvent("ui.server.starting", { host, port, autoOpen });
-  await initializeAuthenticatedRuntime();
-  // Revalidate the small public directory once per process start. The ETag keeps
-  // unchanged restarts cheap, while newly added supporters appear immediately.
-  await initializeSupportersDirectory({ forceRefresh: true });
-  // Warm successful profile nicknames before the browser can request the About
-  // page. Failed lookups are deliberately retried by the authenticated UI later.
-  await getSponsorsDirectory();
-
   let server;
+  let runtimeReady = false;
   let shutdownRequested = false;
   const requestShutdown = () => {
     if (shutdownRequested) {
@@ -939,6 +973,11 @@ async function main() {
     try {
       const url = new URL(request.url || "/", `http://${host}:${port}`);
       requestUrl = url;
+
+      if (!runtimeReady) {
+        sendJson(response, 503, { ok: false, error: "Экземпляр Pbot запускается. Обнови страницу через несколько секунд." });
+        return;
+      }
 
       if (url.pathname.startsWith("/api/")) {
         apiRequestId = nextUiRequestId();
@@ -1003,14 +1042,25 @@ async function main() {
     }
   });
 
-  await new Promise((resolve) => server.listen(port, host, resolve));
+  // Reserve the port before any game requests or automation can run. A second
+  // process for an occupied slot must exit without touching that account.
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, resolve);
+  });
+  await fs.mkdir(getInstancePaths(ROOT_DIR, port).artifactsDir, { recursive: true });
+  process.stdout.write("[Pbot] Restoring local session and automation settings...\n");
+  await initializeAuthenticatedRuntime();
+  // The About page loads the directory and resolves game profiles on demand.
+  // Neither external service may delay HTTP readiness or opening the browser.
+  runtimeReady = true;
   const appUrl = `http://${host}:${port}`;
   process.stdout.write(`UI server listening on ${appUrl}\n`);
   logEvent("ui.server.listening", { host, port, appUrl, autoOpen });
 
-  keepAliveSavedAuthAccounts().catch((error) => {
-    logEvent("auth.accounts.keep_alive_error", { error });
-  });
+  // Inactive saved accounts may be active in another instance. Do not refresh
+  // their credentials here; each instance maintains only its active session.
+  if (process.send) process.send({ type: "pbot-ready", instanceId: INSTANCE_INFO.instanceId });
 
   if (autoOpen) {
     openUrl(appUrl);
@@ -1018,8 +1068,9 @@ async function main() {
 }
 
 main().catch(async (error) => {
+  if (process.send) process.send({ type: "pbot-start-error", error: error.message || "Ошибка запуска экземпляра." });
   logEvent("ui.server.start_error", { error });
   await flushLogs();
   console.error(error.stack || String(error));
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -487,7 +487,7 @@ vm.runInNewContext(
   automationRefreshContext,
 );
 
-const backgroundFightRefreshContext = {};
+const backgroundFightRefreshContext = { document: { hidden: false, body: { classList: { contains: () => false } } } };
 vm.runInNewContext(
   [
     "const calls = [];",
@@ -1251,17 +1251,15 @@ test("UI automation poll refreshes live boss state and key balances", async () =
   assert.equal(automationRefreshContext.calls[3].options.showStatus, false);
 });
 
-test("UI active boss fight refreshes while another tab is open", async () => {
+test("UI leaves inactive boss panel idle while server automation continues", async () => {
   backgroundFightRefreshContext.calls.length = 0;
 
   await backgroundFightRefreshContext.bossAutoTick();
 
   assert.equal(
     JSON.stringify(backgroundFightRefreshContext.calls.map((call) => call.type)),
-    JSON.stringify(["state-refresh", "status"]),
+    JSON.stringify(["status"]),
   );
-  assert.equal(backgroundFightRefreshContext.calls[0].options.silent, true);
-  assert.equal(backgroundFightRefreshContext.calls[0].options.showStatus, false);
 });
 
 test("UI auto queue plan spends current boss keys and credits reward keys to unlocked bosses", () => {

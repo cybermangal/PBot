@@ -12251,3 +12251,32 @@ body.app-ready .app-shell {
 }
 .boss-exclude-rules .field { flex: 1 1 180px; min-width: 0; }
 .boss-exclude-rules .toggle { flex: 1 1 180px; }
+
+.prison-business-panel {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.prison-business-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
+}
+.prison-business-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.prison-business-heading { display: flex; align-items: center; gap: 12px; }
+.prison-business-heading img { width: 56px; height: 56px; object-fit: contain; }
+.prison-business-heading div { display: grid; gap: 5px; overflow-wrap: anywhere; }
+.prison-business-heading span, .prison-business-income span { color: var(--text-soft); font-size: 12px; }
+.prison-business-income { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.prison-business-income strong { color: var(--accent); }
+.prison-business-card .inline-note { margin: 0; }
+.prison-business-card button { margin-top: auto; width: 100%; white-space: normal; }

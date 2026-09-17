@@ -218,6 +218,34 @@ function normalizeBusinessDashboard(response, nowMs = Date.now()) {
   const playerBusinesses = Array.isArray(root.playerBusinesses) ? root.playerBusinesses : [];
   const expectedRewards = { cigarettes: 0, authority: 0, respect: 0 };
   const expectedRewardsByPrison = {};
+  // The game uses the same upgrade operation for purchasing level 1 and later levels.
+  const items = businesses.map((config) => {
+    const owned = playerBusinesses.find((item) => Number(item.businessId) === Number(config.businessId)
+      && Number(item.prisonId) === Number(config.prisonId));
+    const level = asNonNegativeInt(owned && owned.level, 0);
+    const maxLevel = asNonNegativeInt(config.maxLevel, 0);
+    const rewardPerLevel = asNumber(config.rewardPerLevel, 0);
+    const baseCost = config.baseUpgradeCost == null ? NaN : Number(config.baseUpgradeCost);
+    const increment = config.upgradeIncrement == null ? NaN : Number(config.upgradeIncrement);
+    const cost = baseCost + level * increment;
+    const priceKnown = Number.isSafeInteger(cost) && cost >= 0 && baseCost >= 0 && increment >= 0;
+    const maxed = maxLevel > 0 && level >= maxLevel;
+    return {
+      businessId: Number(config.businessId),
+      prisonId: Number(config.prisonId),
+      title: String(config.title || `Бизнес #${config.businessId}`),
+      imageUrl: config.imageUrl || null,
+      level,
+      maxLevel,
+      maxed,
+      rewardType: String(config.rewardType || "").toLowerCase(),
+      rewardPerLevel,
+      currentReward: level * rewardPerLevel,
+      nextReward: maxed ? null : (level + 1) * rewardPerLevel,
+      upgradeCost: maxed || !priceKnown ? null : cost,
+      canUpgrade: !maxed && maxLevel > 0 && priceKnown && rewardPerLevel > 0,
+    };
+  });
 
   for (const owned of playerBusinesses) {
     const config = businesses.find((item) => Number(item.businessId) === Number(owned.businessId)
@@ -257,6 +285,7 @@ function normalizeBusinessDashboard(response, nowMs = Date.now()) {
     cooldownMs: BUSINESS_COLLECT_COOLDOWN_MS,
     expectedRewards,
     expectedRewardsByPrison,
+    items,
     ownedBusinesses: playerBusinesses.length,
     totalBusinesses: businesses.length,
   };

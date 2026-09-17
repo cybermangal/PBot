@@ -1,8 +1,9 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const { getInstancePaths } = require("./ui-instance");
 
 const ROOT_DIR = path.resolve(__dirname, "..", "..");
-const LOG_DIR = path.join(ROOT_DIR, "logs");
+const { logDir: LOG_DIR } = getInstancePaths(ROOT_DIR);
 const REDACTED = "<redacted>";
 const MAX_STRING_LENGTH = 2_000;
 const MAX_ARRAY_ITEMS = 50;

@@ -6,9 +6,11 @@
     <meta name="theme-color" content="#090a0b">
     <title>Управление Pbot</title>
     <link rel="icon" type="image/svg+xml" href="/assets/pbot-favicon.svg">
-    <link rel="stylesheet" href="/styles.css?v=20260906-zaruba-spending">
+    <link rel="stylesheet" href="/styles.css?v=20260908-ux">
+    <link rel="stylesheet" href="/compact.css?v=20260910-zaruba-grid">
   </head>
   <body class="app-loading">
+    <a class="skip-link" href="#workspace">Перейти к содержимому</a>
     <div
       id="initial-loader"
       class="initial-loader"
@@ -71,6 +73,16 @@
             </div>
           </details>
         </header>
+
+        <div class="auth-gate-form" data-instance-controls>
+          <label class="field field-wide"><span>Экземпляры Pbot</span><select data-instance-select><option value="new">＋ Новый экземпляр — отдельная сессия</option></select></label>
+          <div class="button-row">
+            <button data-open-instance class="action-button action-button-alt" type="button">Открыть выбранный</button>
+            <button data-refresh-instances class="action-button action-button-ghost" type="button">Обновить список</button>
+            <a data-instance-link class="action-button action-button-ghost" target="_blank" rel="noopener" hidden>Перейти в экземпляр</a>
+          </div>
+          <p data-instance-note class="inline-note" aria-live="polite" hidden></p>
+        </div>
 
         <div class="auth-gate-form">
           <label class="field field-wide">
@@ -142,8 +154,22 @@
           </button>
           <div class="brand-lockup">
             <p class="eyebrow">Pbot</p>
-            <h1>Панель управления</h1>
+            <h1 id="workspace-title">Боссы</h1>
           </div>
+          <div class="hero-tools"><button id="header-collapse" class="text-button" type="button" aria-expanded="true" aria-controls="header-metrics header-wallet">Свернуть ресурсы</button><button
+      id="journal-toggle"
+      class="journal-toggle"
+      type="button"
+      aria-controls="journal-drawer"
+      aria-expanded="false"
+      hidden
+    >
+      <svg class="journal-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
+        <path d="M5.5 4.5h9M5.5 8h9M5.5 11.5h9M5.5 15h6"></path>
+      </svg>
+      <span>Журнал</span>
+      <span id="journal-count" class="journal-count">0</span>
+    </button></div>
           <div class="hero-meta">
             <span class="hero-meta-item server-status-item">
               <span class="server-indicator" tabindex="0" aria-describedby="account-id-tooltip">
@@ -158,7 +184,7 @@
           </div>
         </div>
 
-        <div class="hero-status">
+        <div id="header-metrics" class="hero-status">
           <div id="dashboard-hero-slots" class="dashboard-hero-slots" aria-label="Настраиваемые показатели шапки"></div>
           <div id="header-vpi" class="status-chip status-chip-resource status-chip-vpi" data-active="false">
             <img
@@ -176,7 +202,7 @@
           </div>
         </div>
 
-        <section class="status-chip status-chip-wide status-chip-wallet hero-wallet" aria-label="Ресурсы аккаунта">
+        <section id="header-wallet" class="status-chip status-chip-wide status-chip-wallet hero-wallet" aria-label="Ресурсы аккаунта">
             <div class="wallet-heading">
               <div>
                 <span class="status-label">Ресурсы</span>
@@ -244,10 +270,7 @@
           >
             <span class="tab-dropdown-chevron" aria-hidden="true"></span>
           </button>
-          <div id="friends-section-menu" class="tab-dropdown-menu" role="menu" aria-label="Разделы вкладки «Друзья»" hidden>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-friends-section="damage">Статистика урона</button>
-            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-friends-section="friends" aria-current="page">Друзья</button>
-          </div>
+
         </div>
         <div id="misc-tab-dropdown" class="tab-dropdown">
           <button
@@ -270,21 +293,13 @@
           >
             <span class="tab-dropdown-chevron" aria-hidden="true"></span>
           </button>
-          <div id="misc-section-menu" class="tab-dropdown-menu" role="menu" aria-label="Разделы вкладки «Разное»" hidden>
-            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-misc-section="deals" aria-current="page">Делюги</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="stashes">Нычки</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="bags">Сумки</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="events">События</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="containers">Посылки и баулы</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="collection">Коллекция вещей</button>
-            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="games">Азартные активности</button>
-          </div>
+
         </div>
         <button class="tab-button" data-tab="system"><span class="tab-icon" aria-hidden="true">⚙</span><span>Система</span></button>
         <button class="tab-button tab-button-about" data-tab="about"><span class="tab-icon" aria-hidden="true">ⓘ</span><span>О боте</span></button>
       </nav>
 
-      <main class="workspace">
+      <main id="workspace" class="workspace" tabindex="-1">
         <section class="tab-panel is-active" data-panel="bosses">
           <div class="panel-grid panel-grid-bosses">
             <section class="card boss-status-card full-span">
@@ -292,7 +307,7 @@
                 <div>
                   <p class="card-kicker">СЕЙЧАС</p>
                   <h2>Активный бой</h2>
-                  <p class="card-subtitle">Здоровье босса, ваш урон и готовое оружие — в одном месте.</p>
+                  <p class="card-subtitle"></p>
                 </div>
                 <div class="card-head-actions">
                   <button
@@ -348,7 +363,11 @@
                     </span>
                   </div>
                   <div id="boss-actions-body" class="boss-weapon-list"></div>
-                  <div class="boss-combat-auxiliary">
+
+                </div>
+              </div>
+
+<div class="boss-combat-auxiliary">
                     <div id="boss-needle-action" class="boss-needle-action" data-state="loading">
                       <img
                         class="boss-needle-icon"
@@ -376,9 +395,6 @@
                     </div>
                     <div id="boss-talents" class="boss-talents-card" hidden></div>
                   </div>
-                </div>
-              </div>
-
               <details class="inline-settings boss-live-settings">
                 <summary>Автообновление боя</summary>
                 <div class="inline-settings-body">
@@ -401,64 +417,36 @@
               <div class="card-head">
                 <div>
                   <p class="card-kicker">ПЛАН БОЁВ</p>
-                  <h2>Сформировать очередь</h2>
-                  <p class="card-subtitle">Выберите босса и режим, добавьте их в план или соберите все доступные автоматически.</p>
+                  <h2>Очередь боёв</h2>
+                  <p class="card-subtitle">Соберите очередь по правилам или добавьте босса вручную.</p>
                 </div>
               </div>
 
               <div class="boss-queue-workflow">
-                <div class="boss-queue-builder">
-                  <div class="workflow-step"><span>1</span><strong>Кого атаковать</strong></div>
-                  <div class="field-grid boss-picker-grid">
+                <div class="boss-queue-compose">
+                  <div class="boss-queue-plan-controls">
                     <label class="field field-wide">
-                      <span>Фильтр каталога</span>
-                      <select id="boss-category">
-                        <option value="startable">Доступные для запуска</option>
-                        <option value="combo">Только с комбо</option>
-                        <option value="">Все боссы</option>
-                        <option value="1">Беспредельщики</option>
-                        <option value="2">Надзиратели</option>
-                        <option value="3">Рецидивисты</option>
-                      </select>
-                    </label>
-                    <label class="field field-wide">
-                      <span>Босс</span>
-                      <select id="boss-select"></select>
-                    </label>
-                  </div>
-
-                  <div class="workflow-step"><span>2</span><strong>Как проводить бой</strong></div>
-                  <div class="field-grid boss-mode-grid">
-                    <label class="field">
-                      <span>Режим</span>
-                      <div class="boss-mode-control">
-                        <select id="boss-mode"></select>
-                        <span id="boss-mode-collection" class="boss-collection-counter" hidden></span>
+                      <span>Источник очереди</span>
+                      <div class="boss-queue-source-row">
+                        <select id="boss-run-source-select">
+                          <option value="auto">По правилам автоформирования</option>
+                        </select>
+                        <button id="boss-run-source-apply" class="action-button action-button-mini" type="button">Сформировать очередь</button>
                       </div>
                     </label>
-                    <label class="field boss-combo-field" hidden>
-                      <span>Комбо</span>
-                      <div class="combo-mode-control boss-combo-collection-control">
-                        <select id="boss-combo-mode"></select>
-                        <span id="boss-combo-mode-collection" class="boss-collection-counter" hidden></span>
-                        <button id="boss-combo-inline-btn" class="action-button action-button-mini action-button-ghost combo-mode-button" type="button" hidden>Комбо</button>
+                    <details class="inline-settings boss-queue-preset-management">
+                      <summary>Управление пресетами</summary>
+                      <div class="inline-settings-body boss-queue-preset-row">
+                        <select id="boss-run-preset-select"></select>
+                        <input id="boss-run-preset-name" type="text" maxlength="80" placeholder="Название нового пресета">
+                        <button id="boss-run-preset-save" class="action-button action-button-mini action-button-alt" type="button">Сохранить текущую очередь</button>
+                        <button id="boss-run-preset-delete" class="text-button text-button-danger" type="button">Удалить выбранный пресет</button>
                       </div>
-                    </label>
+                    </details>
                   </div>
-
-                  <label id="boss-auto-kill-solo-field" class="toggle" hidden><input id="boss-auto-kill-solo" type="checkbox" checked><span>Убить автоматически</span></label>
-                  <label class="toggle"><input id="boss-use-combo" type="checkbox" checked><span>Пробивать комбо, если вбито</span></label>
-
-                  <div class="workflow-step"><span>3</span><strong>Добавить в план</strong></div>
-                  <div class="button-row boss-add-actions">
-                    <button id="boss-run-queue-add" class="action-button" type="button">Добавить в очередь</button>
-                    <button id="boss-start-btn" class="action-button action-button-ghost">Запустить сразу</button>
-                    <button id="boss-buy-selected-key-btn" class="action-button action-button-ghost" type="button" hidden>Купить ключ</button>
-                  </div>
-                  <p id="boss-selected-key-note" class="inline-note">Выберите босса, чтобы увидеть доступность ключа.</p>
 
                   <details id="boss-queue-settings" class="inline-settings boss-queue-settings">
-                    <summary>Правила автоформирования</summary>
+                    <summary>Участники и правила автоформирования</summary>
                     <div class="inline-settings-body boss-auto-rules">
                       <div class="field boss-exclude-field">
                         <details id="boss-run-queue-exclude-panel" class="boss-exclude-panel">
@@ -510,8 +498,59 @@
                       </fieldset>
                     </div>
                   </details>
-                </div>
 
+                  <details class="inline-settings boss-manual-add">
+                    <summary>Добавить босса вручную</summary>
+                    <div class="inline-settings-body boss-queue-builder">
+
+                  <div class="field-grid boss-picker-grid">
+                    <label class="field field-wide">
+                      <span>Фильтр каталога</span>
+                      <select id="boss-category">
+                        <option value="startable">Доступные для запуска</option>
+                        <option value="combo">Только с комбо</option>
+                        <option value="">Все боссы</option>
+                        <option value="1">Беспредельщики</option>
+                        <option value="2">Надзиратели</option>
+                        <option value="3">Рецидивисты</option>
+                      </select>
+                    </label>
+                    <label class="field field-wide">
+                      <span>Босс</span>
+                      <select id="boss-select"></select>
+                    </label>
+                  </div>
+                  <div class="field-grid boss-mode-grid">
+                    <label class="field">
+                      <span>Режим</span>
+                      <div class="boss-mode-control">
+                        <select id="boss-mode"></select>
+                        <span id="boss-mode-collection" class="boss-collection-counter" hidden></span>
+                      </div>
+                    </label>
+                    <label class="field boss-combo-field" hidden>
+                      <span>Комбо</span>
+                      <div class="combo-mode-control boss-combo-collection-control">
+                        <select id="boss-combo-mode"></select>
+                        <span id="boss-combo-mode-collection" class="boss-collection-counter" hidden></span>
+                        <button id="boss-combo-inline-btn" class="action-button action-button-mini action-button-ghost combo-mode-button" type="button" hidden>Комбо</button>
+                      </div>
+                    </label>
+                  </div>
+
+                  <label id="boss-auto-kill-solo-field" class="toggle" hidden><input id="boss-auto-kill-solo" type="checkbox" checked><span>Убить автоматически</span></label>
+                  <label class="toggle"><input id="boss-use-combo" type="checkbox" checked><span>Пробивать комбо, если вбито</span></label>
+                  <div class="button-row boss-add-actions">
+                    <button id="boss-run-queue-add" class="action-button" type="button">Добавить в очередь</button>
+                    <button id="boss-start-btn" class="action-button action-button-ghost">Запустить сразу</button>
+                    <button id="boss-buy-selected-key-btn" class="action-button action-button-ghost" type="button" hidden>Купить ключ</button>
+                  </div>
+                  <p id="boss-selected-key-note" class="inline-note">Выберите босса, чтобы увидеть доступность ключа.</p>
+
+
+                    </div>
+                  </details>
+                </div>
                 <div class="boss-queue-list">
                   <div class="section-heading">
                     <div>
@@ -524,27 +563,8 @@
                     </label>
                   </div>
 
+
                   <div id="boss-run-queue-summary" class="stats-grid stats-grid-tight"></div>
-                  <div class="boss-queue-plan-controls">
-                    <label class="field field-wide">
-                      <span>Как сформировать очередь</span>
-                      <div class="boss-queue-source-row">
-                        <select id="boss-run-source-select">
-                          <option value="auto">По правилам автоформирования</option>
-                        </select>
-                        <button id="boss-run-source-apply" class="action-button action-button-mini" type="button">Сформировать очередь</button>
-                      </div>
-                    </label>
-                    <details class="inline-settings boss-queue-preset-management">
-                      <summary>Управление пресетами</summary>
-                      <div class="inline-settings-body boss-queue-preset-row">
-                        <select id="boss-run-preset-select"></select>
-                        <input id="boss-run-preset-name" type="text" maxlength="80" placeholder="Название нового пресета">
-                        <button id="boss-run-preset-save" class="action-button action-button-mini action-button-alt" type="button">Сохранить текущую очередь</button>
-                        <button id="boss-run-preset-delete" class="text-button text-button-danger" type="button">Удалить выбранный пресет</button>
-                      </div>
-                    </details>
-                  </div>
                   <div class="boss-queue-table-wrap">
                     <div id="boss-run-queue-body" class="boss-run-queue-list" role="list"></div>
                   </div>
@@ -553,11 +573,12 @@
                     <button id="boss-run-queue-clear" class="text-button text-button-danger" type="button">Очистить текущую очередь</button>
                   </div>
                   <p id="boss-run-queue-note" class="inline-note">Автосбор проходит только по выбранным боссам и учитывает комбо и имеющиеся ключи.</p>
+
                 </div>
               </div>
             </section>
 
-            <section class="card boss-catalog-card full-span collapsible-card">
+            <section class="card boss-catalog-card full-span collapsible-card is-collapsed">
               <div class="card-head">
                 <div>
                   <p class="card-kicker">КОЛЛЕКЦИЯ БОССОВ</p>
@@ -636,7 +657,7 @@
                 </div>
               </div>
 
-              <div class="field-grid prison-target-fields">
+              <div class="prison-workflow"><div class="prison-setup"><div class="field-grid prison-target-fields">
                 <label class="field">
                   <span>Что проходим</span>
                   <select id="prison-target-type">
@@ -668,8 +689,8 @@
                 </label>
               </div>
 
-              <div id="prison-automation-message" class="automation-status-message prison-automation-alert" role="status" hidden></div>
-              <div id="prison-automation-progress" class="prison-automation-progress" aria-live="polite"></div>
+
+
 
               <div class="prison-option-grid prison-option-grid-primary">
                 <label class="toggle prison-option-card">
@@ -686,11 +707,9 @@
                 </label>
               </div>
 
-              <div class="prison-profit-strip">
-                <span class="section-kicker">ОБЩАК</span>
-                <div id="prison-business-summary" class="prison-profit-summary"></div>
-                <button id="prison-profit-collect-btn" class="text-button" type="button">Собрать</button>
-              </div>
+
+
+
 
               <details class="inline-settings prison-advanced-settings">
                 <summary>Дополнительные настройки</summary>
@@ -737,31 +756,47 @@
                 </div>
               </details>
 
-              <section class="prison-queue-editor" aria-label="Очередь ходок">
-                <div class="card-head">
-                  <div>
-                    <p class="card-kicker">ОЧЕРЕДЬ</p>
-                    <h3>План ходок</h3>
-                    <p class="card-subtitle">Первый пункт выполняется сейчас. Зарубный пункт исчезает сразу после серверного зачёта цели — полный круг не требуется.</p>
-                  </div>
-                  <button id="prison-queue-add" class="text-button" type="button">Добавить в очередь</button>
-                </div>
-                <div class="prison-queue-flow" aria-label="Как работает очередь">
-                  <span><b>1</b> Проверка цели</span>
-                  <span><b>2</b> Минимальный шаг</span>
-                  <span><b>3</b> Сверка и удаление</span>
-                </div>
-                <div id="prison-queue-list" class="automation-queue-list"></div>
-              </section>
+
 
               <div class="button-row">
                 <button id="prison-save-btn" class="action-button">Сохранить настройки</button>
                 <button id="prison-run-btn" class="action-button action-button-alt">Пройти сейчас</button>
                 <button id="prison-dry-btn" class="action-button action-button-ghost">Предпросмотр</button>
               </div>
+            </div><div class="prison-plan"><div id="prison-automation-message" class="automation-status-message prison-automation-alert" role="status" hidden></div><div id="prison-automation-progress" class="prison-automation-progress" aria-live="polite"></div><section class="prison-queue-editor" aria-label="Очередь ходок">
+                <div class="card-head">
+                  <div>
+                    <p class="card-kicker">ОЧЕРЕДЬ</p>
+                    <h3>План ходок</h3>
+                    <p class="card-subtitle">Первой выполняется верхняя ходка. Задания зарубы убираются после зачёта цели.</p>
+                  </div>
+                  <button id="prison-queue-add" class="text-button" type="button">Добавить в очередь</button>
+                </div>
+                <div class="prison-queue-flow" hidden aria-label="Как работает очередь">
+                  <span><b>1</b> Проверка цели</span>
+                  <span><b>2</b> Минимальный шаг</span>
+                  <span><b>3</b> Сверка и удаление</span>
+                </div>
+                <div id="prison-queue-list" class="automation-queue-list"></div>
+              </section></div></div>
             </section>
+            <section class="card full-span prison-income-card"><div class="card-head"><h2>Доход и бизнесы</h2></div><div class="prison-profit-strip">
+                <span class="section-kicker">ОБЩАК</span>
+                <div id="prison-business-summary" class="prison-profit-summary"></div>
+                <button id="prison-profit-collect-btn" class="text-button" type="button">Собрать</button>
+              </div><div id="prison-business-panel" class="prison-business-panel" hidden>
+                <div class="card-head">
+                  <div>
+                    <p class="card-kicker">БИЗНЕСЫ</p>
+                    <h3 id="prison-business-title">Доход выбранной тюрьмы</h3>
+                    <p class="card-subtitle">Выкупайте и улучшайте за папиросы. Прибыль поступает в общий сбор раз в 8 часов.</p>
+                  </div>
+                </div>
+                <div id="prison-business-list" class="prison-business-list"></div>
+                <p id="prison-business-feedback" class="inline-note" role="status" aria-live="polite"></p>
+              </div></section>
 
-            <section class="card full-span prison-collection-overview">
+            <section class="card full-span prison-collection-overview collapsible-card is-collapsed">
               <div class="card-head">
                 <div>
                   <p class="card-kicker">ЭКИПИРОВКА</p>
@@ -792,12 +827,23 @@
 
         <section class="tab-panel" data-panel="zaruba">
           <div class="panel-grid zaruba-dashboard-layout">
+<section class="card full-span zaruba-task-card">
+              <div class="card-head">
+                <div>
+                  <p class="card-kicker">ТЕКУЩИЕ ЗАДАНИЯ</p>
+                  <h2>Активная заруба</h2>
+                </div>
+              </div>
+              <div id="zaruba-active" class="zaruba-active-state"></div>
+              <div id="zaruba-task" class="zaruba-task-state"></div>
+              <div id="zaruba-boss-queue-status" class="automation-status-message" role="status"></div>
+            </section>
             <section class="card full-span zaruba-overview-card">
               <div class="card-head">
                 <div>
                   <p class="card-kicker">ЗАРУБЫ</p>
-                  <h2>Состояние и прогресс</h2>
-                  <p class="card-subtitle">Названия, лимиты и блокировки берутся из ответа игры. Пропуск за мыло доступен на карточках заданий с подтверждением.</p>
+                  <h2>Прогресс и режим</h2>
+                  <p class="card-subtitle">Выберите режим для следующего запуска.</p>
                 </div>
                 <div class="card-head-actions">
                   <span id="zaruba-updated" class="muted-copy">обновляю…</span>
@@ -813,7 +859,9 @@
                 <button class="action-button action-button-alt" type="button" data-zaruba-action="claim">Забрать награду</button>
                 <button id="zaruba-bags-link" class="action-button action-button-ghost" type="button">Сумки</button>
               </div>
-              <div class="zaruba-rules-section">
+
+            </section>
+<section class="card full-span zaruba-automation-card"><div class="zaruba-rules-section">
                 <div class="zaruba-rules-head">
                   <div class="zaruba-automation-heading">
                     <div class="zaruba-automation-icons" aria-hidden="true">
@@ -891,26 +939,24 @@
                   <button id="zaruba-save-btn" class="action-button action-button-mini" type="button">Сохранить правила</button>
                   <div id="zaruba-last-action" class="automation-status-message" role="status"></div>
                 </div>
-                <div id="zaruba-history" class="zaruba-activity-list"></div>
-              </div>
-            </section>
 
-            <section class="card full-span zaruba-task-card">
-              <div class="card-head">
-                <div>
-                  <p class="card-kicker">ТЕКУЩИЕ ЗАДАНИЯ</p>
-                  <h2>Активная заруба</h2>
-                </div>
-              </div>
-              <div id="zaruba-active" class="zaruba-active-state"></div>
-              <div id="zaruba-task" class="zaruba-task-state"></div>
-              <div id="zaruba-boss-queue-status" class="automation-status-message" role="status"></div>
-            </section>
+              <details class="inline-settings"><summary>Последние действия</summary><div id="zaruba-history" class="zaruba-activity-list"></div></details></div></section>
+
+
 
           </div>
         </section>
 
         <section class="tab-panel" data-panel="misc">
+          <div id="misc-section-menu" class="section-nav" role="tablist" aria-label="Разделы вкладки «Разное»">
+            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-misc-section="deals" aria-current="page">Делюги</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="stashes">Нычки</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="bags">Сумки</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="events">События</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="containers">Посылки и баулы</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="collection">Коллекция вещей</button>
+            <button class="tab-dropdown-item" type="button" role="menuitem" data-misc-section="games">Азартные активности</button>
+          </div>
           <div
             id="misc-section-deals"
             class="panel-grid misc-dashboard-layout misc-section-panel"
@@ -974,7 +1020,7 @@
                 <div>
                   <p class="card-kicker">НЫЧКИ</p>
                   <h2>Впаривание нычек</h2>
-                  <p class="card-subtitle">Готовые комплекты продаются по очереди с защитой от лимита запросов. После завершения сверяется реально полученный ресурс.</p>
+                  <p class="card-subtitle">Продайте готовые комплекты. Полученная награда появится здесь.</p>
                 </div>
                 <button id="misc-vparit-all-btn" class="action-button" type="button">Впарить всё</button>
               </div>
@@ -1043,12 +1089,12 @@
                 <div>
                   <p class="card-kicker">ДОБЫЧА БЕЗ ПОКУПКИ ВАЛЮТЫ</p>
                   <h2>Посылки и баулы</h2>
-                  <p class="card-subtitle">До открытия видно баланс тушёнки, уровень баула и всё уже накопленное содержимое. Баул выгоднее забирать на максимальном 25-м уровне.</p>
+                  <p class="card-subtitle">Посылка — за тушёнку. Баул выгоднее открывать на 25-м уровне.</p>
                 </div>
                 <button id="loot-containers-refresh" class="text-button" type="button">Обновить содержимое</button>
               </div>
               <div id="loot-containers-summary" class="stats-grid loot-containers-summary"></div>
-              <div id="loot-parcel-statistics" class="stats-grid loot-parcel-statistics"></div>
+
 
               <div class="loot-container-grid">
                 <article class="loot-container-card is-parcel">
@@ -1082,7 +1128,7 @@
                   </label>
                   <button id="loot-baul-open" class="action-button" type="button" disabled>Открыть · 20 мыла</button>
                 </article>
-              </div>
+              </div><details class="inline-settings"><summary>Статистика открытий посылок</summary><div id="loot-parcel-statistics" class="stats-grid loot-parcel-statistics"></div></details>
               <details class="inline-settings baul-automation-settings">
                 <summary>Безопасная автоматика баула</summary>
                 <div class="inline-settings-body">
@@ -1135,7 +1181,7 @@
                 <button type="button" data-collection-kind="tattoo" aria-selected="false">Татуировки</button>
                 <button type="button" data-collection-kind="clothing" aria-selected="false">Одежда</button>
               </div>
-              <div id="wearable-collection-matrix" class="collection-bonus-matrix"></div>
+              <details class="inline-settings"><summary>Прогресс коллекции по бонусам</summary><div id="wearable-collection-matrix" class="collection-bonus-matrix"></div></details>
               <div id="wearable-collection-specials" class="wearable-special-grid"></div>
             </section>
 
@@ -1306,7 +1352,7 @@
               </div>
             </section>
 
-            <section class="card event-rules-card">
+            <section class="card event-rules-card collapsible-card is-collapsed">
               <div class="card-head">
                 <div>
                   <p class="card-kicker">КАК ЭТО РАБОТАЕТ</p>
@@ -1329,6 +1375,11 @@
         </section>
 
         <section class="tab-panel" data-panel="friends">
+          <div id="friends-section-menu" class="section-nav" role="tablist" aria-label="Разделы вкладки «Друзья»">
+
+            <button class="tab-dropdown-item is-active" type="button" role="menuitem" data-friends-section="friends" aria-current="page">Друзья</button>
+<button class="tab-dropdown-item" type="button" role="menuitem" data-friends-section="damage">Статистика урона</button>
+          </div>
           <div class="panel-grid friends-dashboard-layout">
             <section class="card full-span friends-overview-card friends-section-panel" data-friends-section="friends">
               <div class="card-head">
@@ -1347,8 +1398,8 @@
               <div class="card-head">
                 <div>
                   <p class="card-kicker">ВЗАИМОДЕЙСТВИЯ</p>
-                  <h2>Действие с друзьями</h2>
-                  <p class="card-subtitle">Выберите действие и сколько друзей обработать.</p>
+                  <h2>Быстрое действие</h2>
+                  <p class="card-subtitle">Выберите действие и количество игроков из топ-10 000 по недельному урону.</p>
                 </div>
               </div>
 
@@ -1363,7 +1414,7 @@
                   </select>
                 </label>
                 <label class="field">
-                  <span>Количество друзей</span>
+                  <span>Количество игроков</span>
                   <input id="friends-action-count" type="number" min="1" value="100">
                 </label>
               </div>
@@ -1376,7 +1427,7 @@
                     <span>Дополнительная задержка, мс</span>
                     <input id="friends-action-delay" type="number" min="0" value="0">
                   </label>
-                  <p class="inline-note">Базовый безопасный интервал уже применяется автоматически.</p>
+                  <p class="inline-note">Без дополнительной задержки одновременно выполняются до 3 запросов. Общий интервал API сохраняется; при задержке запросы идут по одному.</p>
                 </div>
               </details>
 
@@ -1409,13 +1460,40 @@
                   <input id="friends-exclude-self" type="checkbox" checked>
                   <span>Исключить себя</span>
                 </label>
-                <label class="toggle">
-                  <input id="friends-auto-accept" type="checkbox">
-                  <span>Автоприём заявок</span>
-                </label>
+
               </div>
 
-              <details class="inline-settings" open>
+
+
+              <details class="inline-settings">
+                <summary>Дополнительные настройки</summary>
+                <div class="inline-settings-body">
+                  <label class="field">
+                    <span>Дополнительная задержка, мс</span>
+                    <input id="friends-invite-delay" type="number" min="0" value="0">
+                  </label>
+                  <label class="toggle">
+                    <input id="friends-reset-progress" type="checkbox">
+                    <span>Начать список приглашений заново</span>
+                  </label>
+                </div>
+              </details>
+
+              <div class="button-row">
+                <button id="friends-collect-btn" class="action-button">Найти игроков</button>
+                <button id="friends-invite-btn" class="action-button action-button-alt">Пригласить</button>
+
+
+
+
+              </div>
+
+              <div id="friends-summary" class="stats-grid friends-summary"></div>
+            </section>
+<section class="card friends-maintenance-card friends-section-panel" data-friends-section="friends"><div class="card-head"><div><h2>Заявки и чистка</h2><p class="card-subtitle">Единые условия для входящих заявок и текущих друзей.</p></div></div><label class="toggle">
+                  <input id="friends-auto-accept" type="checkbox">
+                  <span>Автоприём заявок</span>
+                </label><details class="inline-settings">
                 <summary>Условия отбора</summary>
                 <div class="inline-settings-body">
                   <div class="field-grid friends-primary-fields">
@@ -1440,7 +1518,7 @@
                       </select>
                     </label>
                     <label class="field">
-                      <span>Недельный урон больше</span>
+                      <span>Минимальный недельный урон</span>
                       <input id="friends-min-weekly-damage" type="number" min="0" placeholder="без фильтра">
                     </label>
                     <label class="field">
@@ -1448,33 +1526,9 @@
                       <input id="friends-cleanup-max" type="number" min="1" value="50">
                     </label>
                   </div>
-                  <p class="inline-note">Одинаковые пороги действуют для входящих заявок и текущих друзей. Входящие, которые не проходят хотя бы один выбранный фильтр, будут отклонены.</p>
+                  <p class="inline-note">Одинаковые пороги действуют для входящих заявок и текущих друзей. Входящие с подтверждённым провалом хотя бы одного фильтра будут отклонены. Неизвестные данные и отсутствие в топе не считаются нулевым уроном. Проверка талантов при чистке останавливается после набора пачки.</p>
                 </div>
-              </details>
-
-              <details class="inline-settings">
-                <summary>Дополнительные настройки</summary>
-                <div class="inline-settings-body">
-                  <label class="field">
-                    <span>Дополнительная задержка, мс</span>
-                    <input id="friends-invite-delay" type="number" min="0" value="0">
-                  </label>
-                  <label class="toggle">
-                    <input id="friends-reset-progress" type="checkbox">
-                    <span>Начать список приглашений заново</span>
-                  </label>
-                </div>
-              </details>
-
-              <div class="button-row">
-                <button id="friends-collect-btn" class="action-button">Найти игроков</button>
-                <button id="friends-invite-btn" class="action-button action-button-alt">Пригласить</button>
-                <button id="friends-accept-btn" class="text-button" type="button">Обработать входящие</button>
-                <button id="friends-cleanup-btn" class="text-button" type="button">Почистить друзей</button>
-              </div>
-
-              <div id="friends-summary" class="stats-grid friends-summary"></div>
-            </section>
+              </details><div class="maintenance-actions"><div><strong>Входящие заявки</strong><div class="button-row"><button id="friends-accept-btn" class="text-button" type="button">Обработать входящие</button><button id="friends-accept-preview-btn" class="text-button" type="button">Проверить входящие</button></div></div><div><strong>Текущие друзья</strong><div class="button-row"><button id="friends-cleanup-btn" class="text-button text-button-danger" type="button">Почистить друзей</button><button id="friends-cleanup-preview-btn" class="text-button" type="button">Проверить чистку</button></div></div></div></section>
 
             <section class="card full-span friends-damage-section-card friends-section-panel" data-friends-section="damage" hidden>
               <div class="card-head">
@@ -1502,7 +1556,7 @@
 
         <section class="tab-panel" data-panel="system">
           <div class="panel-grid system-dashboard-layout">
-            <section class="card auth-card full-span collapsible-card is-collapsed">
+            <section class="card auth-card full-span">
               <div class="card-head">
                 <div>
                   <p class="card-kicker">АККАУНТ</p>
@@ -1521,7 +1575,7 @@
                 <button id="auth-status-btn" class="action-button action-button-ghost">Обновить список и статус</button>
               </div>
               <p id="auth-accounts-note" class="inline-note">Загружаем сохранённые аккаунты…</p>
-              <div class="auth-methods" data-auth-methods>
+              <details class="inline-settings"><summary>Добавить аккаунт или обновить вход</summary><div class="auth-methods" data-auth-methods>
                 <div class="auth-method-tabs" role="tablist" aria-label="Способ входа">
                   <button id="auth-initdata-tab" class="auth-method-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-initdata-panel" tabindex="0">По InitData</button>
                   <button id="auth-tokens-tab" class="auth-method-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-tokens-panel" tabindex="-1">По токенам</button>
@@ -1554,8 +1608,27 @@
                 </div>
               </div>
 
-              <div id="auth-summary" class="stats-grid"></div>
+              </details><div id="auth-summary" class="stats-grid"></div>
               <p id="auth-status-note" class="inline-note">Статус авторизации неизвестен.</p>
+            </section>
+
+            <section class="card system-card full-span">
+              <div class="card-head">
+                <div>
+                  <p id="instance-label" class="card-kicker">Основной экземпляр</p>
+                  <h2>Параллельные аккаунты</h2>
+                  <p class="card-subtitle">Открой отдельный экземпляр Pbot, чтобы войти в другой аккаунт и работать с ним параллельно.</p>
+                </div>
+              </div>
+              <div data-instance-controls>
+              <label class="field field-wide"><span>Экземпляры Pbot</span><select id="instance-select" data-instance-select><option value="new">＋ Новый экземпляр — отдельная сессия</option></select></label>
+              <div class="button-row">
+                <button data-open-instance class="action-button action-button-alt" type="button">Открыть выбранный</button>
+                <button data-refresh-instances class="action-button action-button-ghost" type="button">Обновить список</button>
+                <a data-instance-link class="action-button action-button-ghost" target="_blank" rel="noopener" hidden>Перейти в экземпляр</a>
+              </div>
+              <p id="instance-launch-feedback" data-instance-note class="inline-note" aria-live="polite" hidden></p>
+              </div>
             </section>
 
             <section class="card system-card full-span danger-zone-card">
@@ -1563,7 +1636,7 @@
                 <div>
                   <p class="card-kicker">ЗАВЕРШЕНИЕ РАБОТЫ</p>
                   <h2>Остановить Pbot</h2>
-                  <p class="card-subtitle">Локальный сервер и вся активная автоматика будут остановлены.</p>
+                  <p class="card-subtitle">Сервер и автоматика этого экземпляра будут остановлены. Остальные экземпляры продолжат работу.</p>
                 </div>
                 <button id="server-shutdown-btn" type="button" class="action-button action-button-danger">Остановить и выйти</button>
               </div>
@@ -1619,20 +1692,7 @@
       </main>
     </div>
 
-    <button
-      id="journal-toggle"
-      class="journal-toggle"
-      type="button"
-      aria-controls="journal-drawer"
-      aria-expanded="false"
-      hidden
-    >
-      <svg class="journal-toggle-icon" viewBox="0 0 20 20" aria-hidden="true">
-        <path d="M5.5 4.5h9M5.5 8h9M5.5 11.5h9M5.5 15h6"></path>
-      </svg>
-      <span>Журнал</span>
-      <span id="journal-count" class="journal-count">0</span>
-    </button>
+
     <div id="journal-backdrop" class="journal-backdrop" aria-hidden="true"></div>
     <aside
       id="journal-drawer"
@@ -2029,6 +2089,6 @@
     </dialog>
 
     <script src="/damage-calculator.js"></script>
-    <script src="/app.js?v=20260906-zaruba-spending"></script>
+    <script src="/app.js?v=20260909-ux"></script>
   </body>
 </html>

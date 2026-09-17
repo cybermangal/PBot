@@ -292,25 +292,27 @@ test("Zaruba bag actions refresh balances without fetching brigade bags twice", 
   }
 });
 
-test("podogrev selector never collects more energy than the active Zaruba needs", () => {
-  const selection = __test.selectPodogrevTokensUpToEnergy([
+test("podogrev selector counts unique gifts regardless of their type", () => {
+  const selection = __test.selectPodogrevTokensUpToCount([
     { token: "three", type: 1 },
     { token: "five", type: 2 },
     { token: "seven", type: 3 },
     { token: "ten", type: 5 },
-  ], 12);
+  ], 2);
 
-  assert.equal(selection.energy, 12);
-  assert.equal(selection.exact, true);
-  assert.deepEqual(new Set(selection.tokens), new Set(["five", "seven"]));
+  assert.equal(selection.count, 2);
+  assert.deepEqual(selection.tokens, ["three", "five"]);
 
-  const belowTarget = __test.selectPodogrevTokensUpToEnergy([
+  const belowTarget = __test.selectPodogrevTokensUpToCount([
+    null,
+    { token: "" },
+    { token: "eight", type: 4 },
     { token: "eight", type: 4 },
     { token: "ten", type: 5 },
   ], 9);
-  assert.equal(belowTarget.energy, 8);
-  assert.equal(belowTarget.exact, false);
-  assert.deepEqual(belowTarget.tokens, ["eight"]);
+  assert.equal(belowTarget.count, 2);
+  assert.deepEqual(belowTarget.tokens, ["eight", "ten"]);
+  assert.deepEqual(__test.selectPodogrevTokensUpToCount([{ token: "unused" }], 0).tokens, []);
 });
 
 test("automatic podogrev waits before Zaruba starts and collects a capped selected subset", async () => {
@@ -347,15 +349,14 @@ test("automatic podogrev waits before Zaruba starts and collects a capped select
 
   active = {
     mode: 1,
-    tasks: [{ taskId: "heat", type: 3, requiredAmount: 12, currentAmount: 0 }],
+    tasks: [{ taskId: "heat", type: 3, requiredAmount: 3, currentAmount: 0 }],
   };
   const duringZaruba = await __test.collectPodogrevForActiveZaruba(client);
   assert.equal(duringZaruba.executed, true);
-  assert.equal(duringZaruba.requestedEnergy, 12);
-  assert.deepEqual(new Set(selectedCalls[0]), new Set(["five", "seven"]));
+  assert.equal(duringZaruba.requestedCount, 3);
+  assert.deepEqual(selectedCalls[0], ["three", "five", "seven"]);
 
-  active.tasks[0].requiredAmount = 9;
-  active.tasks[0].currentAmount = 0;
+  active.tasks[0].currentAmount = 1;
   client.podogrev.status = async () => ({
     ok: true,
     status: 200,
@@ -364,10 +365,85 @@ test("automatic podogrev waits before Zaruba starts and collects a capped select
       meta: { claimedToday: 0, leftQuota: 50 },
     },
   });
-  const withoutExactSubset = await __test.collectPodogrevForActiveZaruba(client);
-  assert.equal(withoutExactSubset.executed, false);
-  assert.equal(withoutExactSubset.reason, "podogrev_exact_amount_unavailable");
-  assert.equal(selectedCalls.length, 1);
+  const remainingTwo = await __test.collectPodogrevForActiveZaruba(client);
+  assert.equal(remainingTwo.executed, true);
+  assert.equal(remainingTwo.requestedCount, 2);
+  assert.deepEqual(selectedCalls[1], ["eight", "ten"]);
+
+  active.tasks[0].currentAmount = 3;
+  const completed = await __test.collectPodogrevForActiveZaruba(client);
+  assert.equal(completed.executed, false);
+  assert.equal(completed.reason, "zaruba_podogrev_task_absent");
+  assert.equal(selectedCalls.length, 2);
+});
+
+test("podogrev resumes from 1/3, respects quota and leaves surplus gifts", async () => {
+  const task = { taskId: "heat", type: 3, requiredAmount: 3, currentAmount: 1 };
+  let inbox = [{ token: "a", type: 5 }, { token: "b", type: 4 }, { token: "c", type: 2 }];
+  let leftQuota = 1;
+  const calls = [];
+  const client = {
+    zaruba: { state: async () => ({ ok: true, status: 200, data: { active: { mode: 1, tasks: [task] } } }) },
+    podogrev: {
+      status: async () => ({ ok: true, status: 200, data: { inbox, meta: { claimedToday: 50 - leftQuota, leftQuota } } }),
+      collectSelected: async (tokens) => {
+        calls.push(tokens);
+        task.currentAmount += tokens.length;
+        leftQuota -= tokens.length;
+        inbox = inbox.filter((item) => !tokens.includes(item.token));
+        return { ok: true, status: 200, data: { success: true } };
+      },
+    },
+  };
+  const first = await __test.collectPodogrevForActiveZaruba(client);
+  assert.equal(first.selectedCount, 1);
+  assert.equal(task.currentAmount, 2);
+  const exhausted = await __test.collectPodogrevForActiveZaruba(client);
+  assert.equal(exhausted.executed, false);
+  assert.equal(exhausted.reason, "podogrev_quota_exhausted");
+  leftQuota = 50;
+  await __test.collectPodogrevForActiveZaruba(client);
+  assert.equal(task.currentAmount, 3);
+  assert.deepEqual(calls, [["a"], ["b"]]);
+  assert.deepEqual(inbox.map((item) => item.token), ["c"]);
+  assert.equal((await __test.collectPodogrevForActiveZaruba(client)).executed, false);
+  assert.equal(calls.length, 2);
+});
+
+test("podogrev collects a partial inbox and finishes when more gifts arrive", async () => {
+  const task = { taskId: "heat", type: 3, requiredAmount: 3, currentAmount: 0 };
+  let inbox = [{ token: "a", type: 5 }];
+  const client = {
+    zaruba: { state: async () => ({ ok: true, status: 200, data: { active: { mode: 1, tasks: [task] } } }) },
+    podogrev: {
+      status: async () => ({ ok: true, status: 200, data: { inbox, meta: { leftQuota: 50 } } }),
+      collectSelected: async (tokens) => {
+        task.currentAmount += tokens.length;
+        inbox = inbox.filter((item) => !tokens.includes(item.token));
+        return { ok: true, status: 200, data: { success: true } };
+      },
+    },
+  };
+  assert.equal((await __test.collectPodogrevForActiveZaruba(client)).selectedCount, 1);
+  assert.equal(task.currentAmount, 1);
+  assert.equal((await __test.collectPodogrevForActiveZaruba(client)).reason, "podogrev_unavailable");
+  inbox = [{ token: "b", type: 1 }, { token: "c", type: 4 }];
+  assert.equal((await __test.collectPodogrevForActiveZaruba(client)).selectedCount, 2);
+  assert.equal(task.currentAmount, 3);
+});
+
+test("podogrev plan limits the gift count by remaining progress, inbox and quota", async () => {
+  for (const [available, leftQuota, expected] of [[5, 50, 2], [1, 50, 1], [5, 1, 1], [5, 0, 0], [0, 50, 0]]) {
+    const [task] = await buildZarubaTaskExecutionPlans({
+      podogrev: { status: async () => ({ ok: true, status: 200, data: {
+        inbox: Array.from({ length: available }, () => ({ type: 5 })),
+        meta: { leftQuota },
+      } }) },
+    }, normalizeZarubaTasks({ tasks: [{ taskId: "heat", type: 3, requiredAmount: 3, currentAmount: 1 }] }));
+    assert.equal(task.execution.collectTarget, expected);
+    assert.equal(task.execution.canAct, expected > 0);
+    if (expected > 0) assert.match(task.execution.label, /шт\./);
+  }
 });
 
 test("Zaruba state keeps server-provided modes, locks, progress, balances, and pending reward", () => {

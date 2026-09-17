@@ -22,6 +22,7 @@ const {
 const {
   attachWeeklyDamage,
   evaluateFriendCriteria,
+  extractListPayload,
   loadWeeklyDamageMap,
   normalizeCriteriaOptions: normalizeFriendCriteriaOptions,
   normalizeFriendCandidateRecord,
@@ -174,11 +175,9 @@ const VPI_AUTO_CLAIM_GRACE_MS = 1_500;
 const VPI_AUTO_CLAIM_RETRY_MS = 60_000;
 const VPI_AUTO_CLAIM_IDLE_RECHECK_MS = 15 * 60_000;
 const VPI_AUTO_CLAIM_MAX_DELAY_MS = 2_147_000_000;
-// Live measurements show that the vparit endpoint accepts one completed sale
-// roughly every 2.5 seconds. These requests bypass the busy background queue,
-// then follow that server cooldown; 429 responses still retain retry backoff.
-const VPARIT_REQUEST_INTERVAL_MS = 2_500;
-const VPARIT_RATE_LIMIT_RETRIES = 8;
+// One request sells the available copies of a collection, just like the game
+// button. Wait only when the server explicitly reports a rate limit.
+const VPARIT_RATE_LIMIT_RETRIES = 2;
 let prisonAutomationStateWriteSequence = 0;
 const BOSS_COMBO_REWARDS_URL = "https://oldprison-prod.luckygem.online/assets/PrisonV3/bosses/JSON/boss_combo_rewards_v5.json";
 const MAX_BOSS_AUTOMATION_EVENTS = 800;
@@ -191,13 +190,6 @@ const BOSS_CONSUMABLE_PRICES_RUBLES = Object.freeze({
 });
 const BOSS_MELEE_RESTORE_PRICE_RUBLES = 3;
 const ZARUBA_WHEEL_TICKET_PRICE_RUBLES = 10;
-const PODOGREV_ENERGY_BY_TYPE = Object.freeze({
-  1: 3,
-  2: 5,
-  3: 7,
-  4: 8,
-  5: 10,
-});
 const MELEE_BOSS_ACTION_KEYS = new Set(
   ACTION_DEFINITIONS
     .filter((definition) => definition && definition.category === "melee")
@@ -436,9 +428,10 @@ function normalizeInteractionProgress(rawValue, dayKey = getMoscowDateKey()) {
   };
 }
 
-async function readInteractionProgress(dayKey = getMoscowDateKey()) {
+async function readInteractionProgress(dayKey = getMoscowDateKey(), accountId = null) {
+  const progressPath = accountId ? getAccountArtifactPath(accountId, "friends-interaction-progress-latest.json") : FRIENDS_INTERACTION_PROGRESS_PATH;
   try {
-    const body = await fs.readFile(FRIENDS_INTERACTION_PROGRESS_PATH, "utf8");
+    const body = await fs.readFile(progressPath, "utf8");
     return normalizeInteractionProgress(JSON.parse(body), dayKey);
   } catch (error) {
     if (error && error.code === "ENOENT") {
@@ -448,11 +441,12 @@ async function readInteractionProgress(dayKey = getMoscowDateKey()) {
   }
 }
 
-async function saveInteractionProgress(progress) {
+async function saveInteractionProgress(progress, accountId = null) {
+  const progressPath = accountId ? getAccountArtifactPath(accountId, "friends-interaction-progress-latest.json") : FRIENDS_INTERACTION_PROGRESS_PATH;
   const normalized = normalizeInteractionProgress(progress, progress && progress.dayKey ? progress.dayKey : getMoscowDateKey());
   normalized.updatedAt = new Date().toISOString();
-  await fs.mkdir(path.dirname(FRIENDS_INTERACTION_PROGRESS_PATH), { recursive: true });
-  await fs.writeFile(FRIENDS_INTERACTION_PROGRESS_PATH, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
+  await fs.mkdir(path.dirname(progressPath), { recursive: true });
+  await fs.writeFile(progressPath, `${JSON.stringify(normalized, null, 2)}\n`, "utf8");
   return normalized;
 }
 
@@ -624,8 +618,9 @@ function runFriendsBatchSerialized(kind, operation) {
     try {
       const result = await operation(progress);
       progress.update({
-        status: "completed",
-        stage: "Completed",
+        status: result.notAttemptedTotal > 0 ? "failed" : "completed",
+        stage: result.notAttemptedTotal > 0 ? "Failed" : "Completed",
+        error: result.notAttemptedTotal > 0 ? "Операция остановлена после ошибки API. Остались необработанные цели." : null,
         currentTarget: null,
         finishedAtMs: Date.now(),
         finishedAt: new Date().toISOString(),
@@ -9545,14 +9540,20 @@ async function loadIncomingFriendRequestCandidates(client, options, selfUserId, 
   const max = asPositiveInt(options.max, null);
   const requestedPageSize = asPositiveInt(options.pageSize ?? options["page-size"], 30) ?? 30;
   const pageSize = Math.min(100, Math.max(requestedPageSize, max ?? 0, criteria.hasAny ? 100 : 0));
-  const defaultMaxPages = criteria.hasAny ? MAX_FRIEND_PROFILE_PAGES : 1;
+  const defaultMaxPages = MAX_FRIEND_PROFILE_PAGES;
   const maxPages = asPositiveInt(options.maxPages ?? options["max-pages"], defaultMaxPages) ?? defaultMaxPages;
   const candidatesById = new Map();
+  const seenRecords = new Set();
 
   for (let page = 0; page < maxPages; page += 1) {
     const response = await client.friends.requests({ page, pageSize });
-    if (!response || !response.ok) {
+    if (!isSuccessfulGameResponse(response)) {
       throw new Error(`Could not load incoming friend requests page ${page + 1}: HTTP ${response ? response.status : "unknown"}`);
+    }
+    const rawItems = extractListPayload(response.data);
+    const seenBeforePage = seenRecords.size;
+    for (const item of rawItems) {
+      seenRecords.add(JSON.stringify(item));
     }
     const pageCandidates = normalizeIncomingFriendRequestRecords(
       response && response.data ? response.data : null,
@@ -9569,8 +9570,8 @@ async function loadIncomingFriendRequestCandidates(client, options, selfUserId, 
       requestPagesLoaded: page + 1,
     });
     if (
-      pageCandidates.length === 0
-      || pageCandidates.length < pageSize
+      rawItems.length === 0
+      || seenRecords.size === seenBeforePage
       || (!criteria.hasAny && max !== null && candidatesById.size >= max)
     ) {
       break;
@@ -9590,7 +9591,7 @@ function buildIncomingFriendRequestPlan(candidates, criteria, max) {
     .map((item) => ({ ...item.candidate, evaluation: item.evaluation }));
   const acceptedTargets = max !== null ? eligibleTargets.slice(0, max) : eligibleTargets;
   const rejectedTargets = evaluated
-    .filter((item) => item.evaluation.failed.length > 0 || item.evaluation.unknown.length > 0)
+    .filter((item) => item.evaluation.failed.length > 0)
     .map((item) => ({ ...item.candidate, evaluation: item.evaluation }));
   return {
     evaluated,
@@ -9619,14 +9620,22 @@ async function acceptFriendRequests(options = {}, sessionPath) {
       candidates = attachWeeklyDamage(candidates, weeklyDamageByUserId);
     }
 
+    if (criteria.needsTalents || criteria.needsTalentAchievement) {
+      const enriched = await attachTalentPointsTotals(client, candidates, batch, criteria);
+      candidates = enriched.candidates.map((candidate) => ({
+        ...candidate,
+        talentsCount: candidate.talentsCount ?? candidate.talentPointsTotal ?? null,
+      }));
+    }
+
     const plan = buildIncomingFriendRequestPlan(candidates, criteria, max);
-    const results = [];
+
     batch.setPlan(plan.actions.length, {
       stage: dryRun ? "Previewing incoming requests" : "Processing incoming requests",
       incomingRequestsLoaded: candidates.length,
     });
 
-    for (const item of plan.actions) {
+    const results = await runFriendTargetBatch(plan.actions, { delayMs }, async (item) => {
       const { action, target } = item;
       const userId = String(target.userId);
       const criteriaRecord = buildFriendCriteriaRecord(target, target.evaluation);
@@ -9637,40 +9646,40 @@ async function acceptFriendRequests(options = {}, sessionPath) {
             ? "Accepting friend requests"
             : "Declining friend requests",
       });
+      let row;
       if (dryRun) {
-        results.push({
+        row = {
           ...criteriaRecord,
           userId,
           action,
           dryRun: true,
-        });
+        };
       } else {
         const response = action === "accept"
           ? await client.friends.acceptRequest(userId)
           : await client.friends.declineRequest(userId);
-        results.push({
+        row = {
           ...criteriaRecord,
           userId,
           action,
-          ok: response.ok,
+          ok: isSuccessfulGameResponse(response),
           status: response.status,
           data: response.data,
-        });
+        };
       }
 
-      const row = results[results.length - 1];
+
       batch.completeTarget(userId, row.ok === undefined || row.ok);
 
-      if (delayMs > 0 && item !== plan.actions[plan.actions.length - 1]) {
-        await sleep(delayMs);
-      }
-    }
+      return row;
+    });
 
     const acceptedResults = results.filter((item) => item.action === "accept");
     const declinedResults = results.filter((item) => item.action === "decline");
 
     return {
       selfUserId,
+      notAttemptedTotal: plan.actions.length - results.length,
       requestedTotal: candidates.length,
       eligibleTotal: plan.eligibleTargets.length,
       selectedTotal: plan.acceptedTargets.length,
@@ -9705,7 +9714,7 @@ async function loadFriendMaintenanceProfiles(client, friendIds, selfUserId, prog
     if (!response || !response.ok) {
       throw new Error(`Could not load friend profiles page ${page + 1}: HTTP ${response ? response.status : "unknown"}`);
     }
-    const pageItems = Array.isArray(response.data) ? response.data : [];
+    const pageItems = extractListPayload(response.data);
     const profilesBeforePage = profilesById.size;
     for (const item of pageItems) {
       const candidate = normalizeFriendCandidateRecord(item);
@@ -9794,36 +9803,45 @@ function unwrapFriendSummaryPayload(payload) {
 
 function extractTalentPointsTotal(payload) {
   const root = unwrapFriendSummaryPayload(payload);
-  const value = root && root.overview ? Number(root.overview.talentPointsTotal) : Number.NaN;
+  const raw = root?.overview?.talentPointsTotal;
+  const value = raw === null || raw === undefined || raw === "" ? Number.NaN : Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : null;
 }
 
-async function attachTalentPointsTotals(client, candidates, batch) {
-  const enriched = [];
+async function attachTalentPointsTotals(client, candidates, batch, criteria = null, max = null) {
+  const enriched = candidates.map((candidate) => ({ ...candidate }));
   let loaded = 0;
   let unavailable = 0;
-  for (const candidate of candidates) {
-    const response = await client.friends.achievementSummary(candidate.userId);
-    const talentPointsTotal = response && response.ok ? extractTalentPointsTotal(response.data) : null;
-    if (talentPointsTotal === null) {
-      unavailable += 1;
-      enriched.push({ ...candidate, talentPointsTotal: null });
-    } else {
-      enriched.push({ ...candidate, talentPointsTotal });
-    }
-    loaded += 1;
-    if (loaded === 1 || loaded % 25 === 0 || loaded === candidates.length) {
-      batch.update({
-        stage: "Checking talent totals",
-        talentTotalsLoaded: loaded,
-        talentTotalsTotal: candidates.length,
-        talentTotalsUnavailable: unavailable,
-      });
-    }
+  let failed = criteria ? enriched.filter((candidate) => evaluateFriendCriteria(candidate, criteria).failed.length > 0).length : 0;
+  const pending = enriched.filter((candidate) => {
+    if (!criteria) return true;
+    const evaluation = evaluateFriendCriteria(candidate, criteria);
+    return evaluation.failed.length === 0 && evaluation.unknown.some((check) => ["talents", "talentPointsTotal"].includes(check.key));
+  });
+  // Only read personal files still needed for a decision. Stop once the cleanup
+  // limit is satisfied; the remaining friends will be checked on the next run.
+  for (let offset = 0; offset < pending.length && (max === null || failed < max); offset += 4) {
+    await Promise.all(pending.slice(offset, offset + 4).map(async (candidate) => {
+      const response = await client.friends.achievementSummary(candidate.userId).catch(() => null);
+      const total = isSuccessfulGameResponse(response) ? extractTalentPointsTotal(response.data) : null;
+      candidate.talentPointsTotal = total;
+      if (criteria?.needsTalents && candidate.talentsCount == null) candidate.talentsCount = total;
+      if (total === null) unavailable += 1;
+      if (criteria && evaluateFriendCriteria(candidate, criteria).failed.length > 0) failed += 1;
+      loaded += 1;
+    }));
+    batch.update({
+      stage: "Checking talent totals",
+      talentTotalsLoaded: loaded,
+      talentTotalsTotal: pending.length,
+      talentTotalsUnavailable: unavailable,
+    });
   }
   return {
     candidates: enriched,
     unavailable,
+    loaded,
+    unchecked: pending.length - loaded,
   };
 }
 
@@ -9870,49 +9888,49 @@ async function cleanupFriends(options = {}, sessionPath) {
     }
     let talentAchievementInfo = null;
     if (criteria.needsTalentAchievement) {
-      talentAchievementInfo = await attachTalentPointsTotals(client, candidates, batch);
+      talentAchievementInfo = await attachTalentPointsTotals(client, candidates, batch, criteria, max);
       candidates = talentAchievementInfo.candidates;
     }
 
     const selection = selectFriendCleanupTargets(candidates, criteria, max);
     const targets = selection.targets;
-    const results = [];
+
     batch.setPlan(targets.length, {
       stage: dryRun ? "Previewing friend cleanup" : "Cleaning friends",
       friendsTotal: friendIdSet.size,
       authorityProfilesTotal: candidates.length,
     });
 
-    for (const target of targets) {
+    const results = await runFriendTargetBatch(targets, { delayMs }, async (target) => {
       const userId = String(target.userId);
       const criteriaRecord = buildFriendCriteriaRecord(target, target.evaluation);
+      let row;
       if (dryRun) {
-        results.push({
+        row = {
           ...criteriaRecord,
           userId,
           dryRun: true,
-        });
+        };
       } else {
         const removeResponse = await client.friends.remove(userId);
-        results.push({
+        row = {
           ...criteriaRecord,
           userId,
-          ok: removeResponse.ok,
+          ok: isSuccessfulGameResponse(removeResponse),
           status: removeResponse.status,
           data: removeResponse.data,
-        });
+        };
       }
 
-      const row = results[results.length - 1];
+
       batch.completeTarget(userId, row.ok === undefined || row.ok);
 
-      if (delayMs > 0 && target !== targets[targets.length - 1]) {
-        await sleep(delayMs);
-      }
-    }
+      return row;
+    });
 
     return {
       selfUserId,
+      notAttemptedTotal: targets.length - results.length,
       friendsTotal: friendIdSet.size,
       requestedTotal: candidates.length,
       failedCriteriaTotal: selection.failedTotal,
@@ -9921,6 +9939,8 @@ async function cleanupFriends(options = {}, sessionPath) {
       skippedUnknownCriteria: selection.skippedUnknownCriteria,
       skippedOverflow: selection.skippedOverflow,
       talentTotalsUnavailable: talentAchievementInfo ? talentAchievementInfo.unavailable : 0,
+      talentTotalsLoaded: talentAchievementInfo ? talentAchievementInfo.loaded : 0,
+      talentTotalsUnchecked: talentAchievementInfo ? talentAchievementInfo.unchecked : 0,
       okCount: dryRun ? targets.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
       delayMs,
@@ -9932,6 +9952,49 @@ async function cleanupFriends(options = {}, sessionPath) {
   }));
 }
 
+async function runFriendTargetBatch(targets, { delayMs = 0, continueOnError = true, onChunk = async () => {} }, operation) {
+  const results = [];
+  const concurrency = delayMs > 0 || !continueOnError ? 1 : 3;
+  for (let offset = 0; offset < targets.length; offset += concurrency) {
+    const settled = await Promise.allSettled(targets.slice(offset, offset + concurrency).map(operation));
+    for (const item of settled) {
+      if (item.status === "fulfilled") results.push(item.value);
+    }
+    await onChunk();
+    const failure = settled.find((item) => item.status === "rejected");
+    if (failure) throw failure.reason;
+    // POSTs are never replayed automatically. Stop scheduling after throttling
+    // or auth failure; all already dispatched requests have settled here.
+    if (results.some((row) => [401, 403, 429].includes(row.status)) || (!continueOnError && results.some((row) => row.ok === false))) break;
+    if (delayMs > 0 && offset + concurrency < targets.length) await sleep(delayMs);
+  }
+  return results;
+}
+
+function selectDamageInteractionTargets(rows, options, selfUserId, type, progress) {
+  const max = asPositiveInt(options.max, null);
+  const positive = HIGHEST_AUTHORITY_INTERACTION_TYPES.has(type);
+  const seen = new Set();
+  const selection = { strategy: positive ? "highest_weekly_damage" : "lowest_weekly_damage", source: "weekly_top_10000", skippedSelf: 0, skippedAlreadyPerformed: 0, skippedWithoutDamage: 0 };
+  const candidates = [];
+  for (const row of rows) {
+    const userId = String(row.userId);
+    if (!/^\d+$/.test(userId) || seen.has(userId)) continue;
+    seen.add(userId);
+    if (userId === String(selfUserId)) { selection.skippedSelf += 1; continue; }
+    if (hasCompletedInteraction(progress, type, userId)) { selection.skippedAlreadyPerformed += 1; continue; }
+    if (row.weeklyDamage === null || row.weeklyDamage === undefined || !Number.isFinite(Number(row.weeklyDamage))) {
+      selection.skippedWithoutDamage += 1;
+      continue;
+    }
+    candidates.push({ ...row, userId });
+  }
+  candidates.sort((left, right) => (positive ? -1 : 1) * (left.weeklyDamage - right.weeklyDamage) || Number(left.userId) - Number(right.userId));
+  selection.eligibleTotal = candidates.length;
+  selection.shortfall = max === null ? 0 : Math.max(0, max - candidates.length);
+  return { targets: max === null ? candidates : candidates.slice(0, max), selection };
+}
+
 async function runFriendsAction(options = {}, sessionPath) {
   return runFriendsBatchSerialized("action", async (batch) => withContext(sessionPath, async ({ client, selfUserId }) => {
     const type = String(options.type || "").trim();
@@ -9939,12 +10002,13 @@ async function runFriendsAction(options = {}, sessionPath) {
       throw new Error(`Unsupported interaction type: ${type}`);
     }
 
-    batch.update({ stage: "Loading friends profiles" });
-    const profiles = await loadFriendAuthorityProfiles(client, selfUserId, batch);
-    const friendIds = new Set(profiles.map((profile) => profile.userId));
-    const progress = await readInteractionProgress();
-    const { targets, selection } = selectFriendInteractionTargets(
-      profiles,
+    batch.update({ stage: "Loading weekly damage" });
+    const ranking = await loadWeeklyDamageMap(client, 10000);
+    const fromUserId = options.fromUserId ? String(options.fromUserId) : selfUserId;
+    if (String(fromUserId) !== String(selfUserId)) throw new Error("Friend actions must use the active account.");
+    const progress = await readInteractionProgress(getMoscowDateKey(), selfUserId);
+    const { targets, selection } = selectDamageInteractionTargets(
+      [...ranking.values()],
       options,
       selfUserId,
       type,
@@ -9953,25 +10017,32 @@ async function runFriendsAction(options = {}, sessionPath) {
     const delayMs = asNonNegativeInt(options.delayMs, 0) ?? 0;
     const dryRun = toBool(options.dryRun, false);
     const continueOnError = toBool(options.continueOnError, true);
-    const fromUserId = options.fromUserId ? String(options.fromUserId) : selfUserId;
-    const results = [];
+    let progressChanged = false;
 
     batch.setPlan(targets.length, {
       stage: dryRun ? "Previewing targets" : "Performing actions",
-      authorityProfilesTotal: profiles.length,
       currentTarget: null,
     });
 
-    for (const target of targets) {
+    const results = await runFriendTargetBatch(targets, {
+      delayMs,
+      continueOnError,
+      onChunk: async () => {
+        if (progressChanged) {
+          await saveInteractionProgress(progress, selfUserId);
+          progressChanged = false;
+        }
+      },
+    }, async (target) => {
       if (dryRun) {
-        results.push({
+        batch.completeTarget(target.userId, true);
+        return {
           toUserId: target.userId,
           nickname: target.nickname,
           dryRun: true,
-          authority: target.authority,
-          authorityRank: target.authorityRank,
-        });
-        batch.completeTarget(target.userId, true);
+          weeklyDamage: target.weeklyDamage,
+          weeklyRank: target.weeklyRank,
+        };
       } else {
         const response = await client.interactions.perform({
           fromUserId,
@@ -9984,10 +10055,9 @@ async function runFriendsAction(options = {}, sessionPath) {
           ok: isInteractionResponseSuccessful(response),
           status: response.status,
           data: response.data,
-          authority: target.authority,
-          authorityRank: target.authorityRank,
+          weeklyDamage: target.weeklyDamage,
+          weeklyRank: target.weeklyRank,
         };
-        results.push(row);
         batch.completeTarget(target.userId, row.ok);
 
         if (
@@ -9995,28 +10065,21 @@ async function runFriendsAction(options = {}, sessionPath) {
           && (row.ok || isAlreadyPerformedInteractionResponse(response))
           && markCompletedInteraction(progress, type, target.userId)
         ) {
-          await saveInteractionProgress(progress);
+          progressChanged = true;
         }
 
-        if (!row.ok && !continueOnError) {
-          break;
-        }
+        return row;
       }
-
-      if (delayMs > 0 && target !== targets[targets.length - 1]) {
-        await sleep(delayMs);
-      }
-    }
+    });
 
     return {
       selfUserId,
       fromUserId,
       type,
-      friendsTotal: friendIds.size,
-      authorityProfilesTotal: profiles.length,
-      authorityProfilesMissing: Math.max(0, friendIds.size - profiles.length),
+      rankingTotal: ranking.size,
       selection,
       selectedTotal: targets.length,
+      notAttemptedTotal: targets.length - results.length,
       okCount: dryRun ? targets.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
       dryRun,
@@ -10032,7 +10095,7 @@ function getGamePayload(response) {
   return response && Object.prototype.hasOwnProperty.call(response, "data") ? response.data : response;
 }
 
-async function getZarubaProfitCollectionGate(client) {
+async function getZarubaProfitCollectionGate(client, requestOptions = {}) {
   if (!client || !client.zaruba || typeof client.zaruba.state !== "function") {
     return {
       canCollect: false,
@@ -10042,7 +10105,7 @@ async function getZarubaProfitCollectionGate(client) {
     };
   }
 
-  const response = await client.zaruba.state();
+  const response = await client.zaruba.state(requestOptions);
   if (!isSuccessfulGameResponse(response)) {
     return {
       canCollect: false,
@@ -10064,8 +10127,8 @@ async function getZarubaProfitCollectionGate(client) {
   };
 }
 
-async function assertZarubaStartedForProfitCollection(client) {
-  const gate = await getZarubaProfitCollectionGate(client);
+async function assertZarubaStartedForProfitCollection(client, requestOptions = {}) {
+  const gate = await getZarubaProfitCollectionGate(client, requestOptions);
   if (gate.canCollect) {
     return gate;
   }
@@ -10080,9 +10143,17 @@ async function assertZarubaStartedForProfitCollection(client) {
   throw error;
 }
 
-async function collectBusinessProfitAfterZarubaCheck(client) {
-  const gate = await assertZarubaStartedForProfitCollection(client);
-  const response = await client.business.collect();
+async function requestBusinessProfitCollection(client, requestOptions = {}) {
+  const response = await client.business.collect(requestOptions);
+  if (!isSuccessfulGameResponse(response)) {
+    throw new Error(getGameResponseMessage(response) || "Игра отклонила сбор общака.");
+  }
+  return response;
+}
+
+async function collectBusinessProfitAfterZarubaCheck(client, requestOptions = {}) {
+  const gate = await assertZarubaStartedForProfitCollection(client, requestOptions);
+  const response = await requestBusinessProfitCollection(client, requestOptions);
   return { gate, response };
 }
 
@@ -10437,45 +10508,13 @@ function advancePrisonAutomationQueue(queue, options = {}) {
   };
 }
 
-function getPodogrevInboxItemEnergy(item) {
-  const type = Number(item && item.type);
-  return Math.max(0, Number(PODOGREV_ENERGY_BY_TYPE[type] || 0));
-}
-
-function selectPodogrevTokensUpToEnergy(inbox, requestedEnergy) {
-  const target = Math.max(0, Math.trunc(Number(requestedEnergy) || 0));
-  if (target <= 0) {
-    return { tokens: [], energy: 0, exact: true };
-  }
-
-  const items = (Array.isArray(inbox) ? inbox : [])
-    .map((item) => ({
-      token: String(item && item.token || "").trim(),
-      energy: getPodogrevInboxItemEnergy(item),
-    }))
-    .filter((item) => item.token && item.energy > 0 && item.energy <= target);
-  const bestByEnergy = new Map([[0, []]]);
-
-  for (const item of items) {
-    const known = [...bestByEnergy.entries()].sort((left, right) => right[0] - left[0]);
-    for (const [energy, tokens] of known) {
-      const nextEnergy = energy + item.energy;
-      if (nextEnergy > target || bestByEnergy.has(nextEnergy)) {
-        continue;
-      }
-      bestByEnergy.set(nextEnergy, [...tokens, item.token]);
-    }
-    if (bestByEnergy.has(target)) {
-      break;
-    }
-  }
-
-  const energy = Math.max(...bestByEnergy.keys());
-  return {
-    tokens: bestByEnergy.get(energy) || [],
-    energy,
-    exact: energy === target,
-  };
+function selectPodogrevTokensUpToCount(inbox, requestedCount) {
+  const target = Math.max(0, Math.trunc(Number(requestedCount) || 0));
+  // Zaruba credits collected inbox entries, regardless of the gift type.
+  const tokens = [...new Set((Array.isArray(inbox) ? inbox : [])
+    .map((item) => String(item && item.token || "").trim())
+    .filter(Boolean))].slice(0, target);
+  return { tokens, count: tokens.length };
 }
 
 async function loadActiveZarubaPodogrevTask(client) {
@@ -10524,28 +10563,27 @@ async function collectPodogrevForActiveZaruba(client) {
   const statusResponse = await client.podogrev.status();
   const statusPayload = getGamePayload(statusResponse) || {};
   const status = normalizePodogrevDashboard(statusResponse);
-  const targetEnergy = Math.max(0, Math.min(remaining, Number(status.leftQuota || 0)));
-  if (status.available <= 0 || targetEnergy <= 0) {
+  const targetCount = Math.max(0, Math.min(remaining, Number(status.leftQuota || 0)));
+  if (status.available <= 0 || targetCount <= 0) {
     return {
       ok: true,
       executed: false,
       reason: status.available <= 0 ? "podogrev_unavailable" : "podogrev_quota_exhausted",
       remaining,
-      targetEnergy,
+      targetCount,
       status,
       zaruba: gate,
     };
   }
 
-  const selection = selectPodogrevTokensUpToEnergy(statusPayload.inbox, targetEnergy);
-  if (!selection.exact || selection.energy <= 0 || selection.tokens.length === 0) {
+  const selection = selectPodogrevTokensUpToCount(statusPayload.inbox, targetCount);
+  if (selection.count === 0) {
     return {
       ok: true,
       executed: false,
-      reason: "podogrev_exact_amount_unavailable",
+      reason: "podogrev_unavailable",
       remaining,
-      targetEnergy,
-      selection,
+      targetCount,
       status,
       zaruba: gate,
     };
@@ -10557,8 +10595,7 @@ async function collectPodogrevForActiveZaruba(client) {
     executed: true,
     type: "podogrev",
     remaining,
-    requestedEnergy: selection.energy,
-    exact: selection.exact,
+    requestedCount: selection.count,
     selectedCount: selection.tokens.length,
     before: status,
     response: sanitizeBossAutomationValue(getGamePayload(response)),
@@ -11021,13 +11058,17 @@ async function runPrisonAutomationTick(options = {}, sessionPath) {
           prisonAutomationRuntime.lastMaintenanceCheckAt = now;
           maintenance = { profit: null, podogrev: null };
           if (state.autoCollectProfit) {
-            const business = normalizeBusinessDashboard(await client.business.all(), now);
+            const businessResponse = await client.business.all();
+            if (!isSuccessfulGameResponse(businessResponse)) {
+              throw new Error(getGameResponseMessage(businessResponse) || "Не удалось проверить готовность общака.");
+            }
+            const business = normalizeBusinessDashboard(businessResponse, now);
             maintenance.profit = { canCollect: business.canCollect, collected: false };
             if (business.canCollect) {
               const profitGate = await getZarubaProfitCollectionGate(client);
               maintenance.profit.zaruba = profitGate;
               if (profitGate.canCollect) {
-                const collected = await client.business.collect();
+                const collected = await requestBusinessProfitCollection(client);
                 maintenance.profit.collected = isSuccessfulGameResponse(collected);
                 maintenance.profit.result = getGamePayload(collected);
               } else {
@@ -13096,8 +13137,8 @@ async function getBossDashboard(options = {}, sessionPath) {
     const fast = toBool(options.fast, false);
     const catalog = await buildBossCatalog(client, { fast });
     const bossIds = (catalog.bosses || []).map((boss) => Number(boss.id)).filter(Boolean);
-    const [wearableInventory, wearableCatalog, cameraCatalogResponse, comboRewardsCatalog, avatarSync] = fast
-      ? [{ ownedClothing: [], ownedTattoos: [] }, { items: [] }, null, null, null]
+    const [wearableInventory, wearableCatalog, cameraCatalogResponse, comboRewardsCatalog] = fast
+      ? [{ ownedClothing: [], ownedTattoos: [] }, { items: [] }, null, null]
       : await Promise.all([
           loadWearableInventory(client, { accountKey: selfUserId }),
           loadWearableCatalog(client, {
@@ -13106,15 +13147,7 @@ async function getBossDashboard(options = {}, sessionPath) {
           }),
           client.get("/api/camera/all"),
           loadBossComboRewards(),
-          Promise.resolve({
-            generatedIds: [],
-            skippedIds: bossIds,
-            failures: [],
-          }),
         ]);
-    if (avatarSync && (avatarSync.generatedIds.length > 0 || avatarSync.failures.length > 0)) {
-      logEvent("boss.avatar_sync", avatarSync);
-    }
     const cameraCatalogPayload = getGamePayload(cameraCatalogResponse) || {};
     const sourceRewardItems = [
       ...(wearableCatalog.items || []),
@@ -13303,7 +13336,6 @@ async function getBossDashboard(options = {}, sessionPath) {
       arrivals: catalog.arrivals,
       rewards: bossRewards,
       catalogSource: catalog.account ? catalog.account.catalogSource : null,
-      avatarSync,
     };
   });
 }
@@ -14865,8 +14897,71 @@ async function getBusinessStatus(options = {}, sessionPath) {
 
 async function collectBusinessProfit(options = {}, sessionPath) {
   return withContext(sessionPath, async ({ client }) => {
-    const { response } = await collectBusinessProfitAfterZarubaCheck(client);
+    const { response } = await collectBusinessProfitAfterZarubaCheck(client, { throttle: false });
     return response.data;
+  });
+}
+
+const businessUpgradeLocks = new Set();
+
+async function upgradeBusinessWithClient(client, options = {}) {
+  const prisonId = Number(options.prisonId);
+  const businessId = Number(options.businessId);
+  if (![prisonId, businessId].every((id) => Number.isSafeInteger(id) && id > 0)) {
+    throw new Error("Укажите тюрьму и бизнес из каталога.");
+  }
+  // Manual purchases must not wait behind background automation polling.
+  const requestOptions = { throttle: false };
+  const response = await client.business.all(requestOptions);
+  if (!isSuccessfulGameResponse(response)) {
+    throw new Error(getGameResponseMessage(response) || "Не удалось загрузить бизнесы.");
+  }
+  const business = normalizeBusinessDashboard(response);
+  const item = business.items.find((entry) => entry.prisonId === prisonId && entry.businessId === businessId);
+  if (!item) throw new Error("Бизнес не найден в выбранной тюрьме.");
+  if (!item.canUpgrade) throw new Error(item.maxed ? "Бизнес уже выкуплен до максимума." : "Выкуп этого бизнеса недоступен.");
+  const plan = { prisonId, businessId, level: item.level, newLevel: item.level + 1, cost: item.upgradeCost, currency: "cigarettes" };
+  if (toBool(options.dryRun, false)) return { dryRun: true, plan, business };
+  if (options.expectedLevel == null || options.expectedCost == null
+    || Number(options.expectedLevel) !== item.level || Number(options.expectedCost) !== item.upgradeCost) {
+    throw new Error("Уровень или цена бизнеса изменились. Обновите тюрьмы и повторите выкуп.");
+  }
+  const upgraded = await client.business.upgrade(businessId, prisonId, requestOptions);
+  if (!isSuccessfulGameResponse(upgraded) || upgraded.data?.success !== true) {
+    throw new Error(getGameResponseMessage(upgraded) || "Игра отклонила выкуп бизнеса.");
+  }
+  const result = { success: true, plan, business: null, refreshError: null };
+  const newLevel = Number(upgraded.data.newLevel);
+  if (Number.isSafeInteger(newLevel) && newLevel === plan.newLevel) {
+    // The game's receipt is authoritative: no second catalogue request is needed.
+    const root = getGamePayload(response);
+    const playerBusinesses = (root.playerBusinesses || []).filter((owned) =>
+      Number(owned.prisonId) !== prisonId || Number(owned.businessId) !== businessId);
+    playerBusinesses.push({ prisonId, businessId, level: newLevel });
+    result.business = normalizeBusinessDashboard({ ...root, playerBusinesses });
+    return result;
+  }
+  try {
+    const refreshed = await client.business.all(requestOptions);
+    if (!isSuccessfulGameResponse(refreshed)) throw new Error("Не удалось обновить бизнесы.");
+    result.business = normalizeBusinessDashboard(refreshed);
+  } catch (error) {
+    // A failed refresh must never turn a completed purchase into a retryable failure.
+    result.refreshError = "Бизнес выкуплен. Обновите тюрьмы, чтобы увидеть новый уровень и доход.";
+  }
+  return result;
+}
+
+async function upgradeBusiness(options = {}, sessionPath) {
+  return withContext(sessionPath, async ({ client, selfUserId, sessionPath: activePath }) => {
+    const key = selfUserId || activePath;
+    if (businessUpgradeLocks.has(key)) throw new Error("Дождитесь завершения текущего выкупа бизнеса.");
+    businessUpgradeLocks.add(key);
+    try {
+      return await upgradeBusinessWithClient(client, options);
+    } finally {
+      businessUpgradeLocks.delete(key);
+    }
   });
 }
 
@@ -15000,7 +15095,7 @@ async function loadLowestAuthorityTargets(client, selfUserId, options = {}) {
 
 async function performMonthlyInteraction(client, selfUserId, type, requestedCount) {
   const targets = await loadLowestAuthorityTargets(client, selfUserId);
-  const progress = await readInteractionProgress();
+  const progress = await readInteractionProgress(getMoscowDateKey(), selfUserId);
   const successes = [];
   const failures = [];
   const repeatable = !ONE_PER_DAY_INTERACTION_TYPES.has(type);
@@ -15044,7 +15139,7 @@ async function performMonthlyInteraction(client, selfUserId, type, requestedCoun
   }
 
   if (progressChanged) {
-    await saveInteractionProgress(progress);
+    await saveInteractionProgress(progress, selfUserId);
   }
 
   return {
@@ -15283,7 +15378,7 @@ async function executeMonthlyCheapAction(client, selfUserId, monthly, sessionPat
           zaruba: profitGate,
         };
       }
-      const response = await client.business.collect();
+      const response = await requestBusinessProfitCollection(client);
       return {
         type: "business_profit",
         ok: isSuccessfulGameResponse(response),
@@ -15652,19 +15747,21 @@ async function executeVparitAll(client, selfUserId) {
   let beforeResources = null;
 
   try {
-    const dashboard = normalizeStashDashboard(await client.collection.full(selfUserId, {
+    const collectionResponse = await client.collection.full(selfUserId, {
       throttle: false,
       rateLimitRetries: VPARIT_RATE_LIMIT_RETRIES,
-    }));
+    });
+    if (!isSuccessfulGameResponse(collectionResponse)) {
+      throw new Error(`Не удалось загрузить нычки: ${getVparitFailureMessage(collectionResponse)}`);
+    }
+    const dashboard = normalizeStashDashboard(collectionResponse);
     const queue = dashboard.zones.flatMap((zone) => zone.sets
       .filter((set) => set.sellableCycles > 0)
-      .flatMap((set) => Array.from({ length: set.sellableCycles }, (_, cycleIndex) => ({
+      .map((set) => ({
         prisonId: set.prisonId,
         collectionId: set.collectionId,
         collectionName: set.name,
-        cycleIndex: cycleIndex + 1,
-        cycleCount: set.sellableCycles,
-      }))));
+      })));
     miscVparitRuntime.planned = queue.length;
 
     if (queue.length > 0) {
@@ -15706,10 +15803,12 @@ async function executeVparitAll(client, selfUserId) {
             message: getVparitFailureMessage(response),
           });
         }
-      }
-
-      if (VPARIT_REQUEST_INTERVAL_MS > 0 && index < queue.length - 1) {
-        await sleep(VPARIT_REQUEST_INTERVAL_MS);
+        // A persistent transport/auth/rate-limit failure affects the whole
+        // queue. Do not repeat it for every remaining collection.
+        if ([401, 403, 429].includes(response.status) || response.status >= 500) {
+          miscVparitRuntime.lastError = getVparitFailureMessage(response);
+          break;
+        }
       }
     }
     miscVparitRuntime.sellingFinishedAt = miscVparitRuntime.sellingStartedAt
@@ -15749,7 +15848,7 @@ async function executeVparitAll(client, selfUserId) {
     miscVparitRuntime.running = false;
     miscVparitRuntime.finishedAt = new Date().toISOString();
     miscVparitRuntime.current = null;
-    miscVparitRuntime.phase = miscVparitRuntime.lastError ? "failed" : "completed";
+    miscVparitRuntime.phase = miscVparitRuntime.lastError || miscVparitRuntime.failed > 0 ? "failed" : "completed";
     const finishedView = buildVparitRuntimeView();
     miscVparitRuntime.lastResult = {
       startedAt: miscVparitRuntime.startedAt,
@@ -17845,7 +17944,7 @@ async function executeZarubaDirectTask(task, options = {}, dependencies = {}) {
       if (!profitGate.canCollect) {
         return { ok: true, executed: false, reason: profitGate.reason, status, zaruba: profitGate };
       }
-      const response = await client.business.collect();
+      const response = await requestBusinessProfitCollection(client);
       return {
         ok: isSuccessfulGameResponse(response),
         executed: true,
@@ -18521,6 +18620,7 @@ module.exports = {
   buyMissingMasterItems,
   buyMonthlyDay,
   collectBusinessProfit,
+  upgradeBusiness,
   cleanupFriends,
   collectIds,
   collectPodogrev,
@@ -18639,6 +18739,7 @@ module.exports = {
     normalizeInteractionProgress,
     normalizeFriendCriteriaOptions,
     normalizeFriendCleanupCriteria,
+    buildFriendCriteriaRecord,
     buildIncomingFriendRequestPlan,
     extractTalentPointsTotal,
     normalizeIncomingFriendRequestRecords,
@@ -18679,6 +18780,11 @@ module.exports = {
     summarizeBossComboRun,
     selectCollectedInteractionTargets,
     selectFriendInteractionTargets,
+    selectDamageInteractionTargets,
+    runFriendTargetBatch,
+    attachTalentPointsTotals,
+    loadIncomingFriendRequestCandidates,
+    loadFriendMaintenanceProfiles,
     summarizeBossCheckSession,
     buildBossMeleeCooldowns,
     parseBossTimestampMs,
@@ -18754,14 +18860,14 @@ module.exports = {
     getChefirRecoveryDecision,
     restorePrisonAutomationEnergyIfNeeded,
     getZarubaProfitCollectionGate,
-    getPodogrevInboxItemEnergy,
-    selectPodogrevTokensUpToEnergy,
+    selectPodogrevTokensUpToCount,
     loadActiveZarubaPodogrevTask,
     collectPodogrevForActiveZaruba,
     getSessionSelfUserId,
     getAccountArtifactPath,
     assertZarubaStartedForProfitCollection,
     collectBusinessProfitAfterZarubaCheck,
+    upgradeBusinessWithClient,
     loadPrisonAutomationState,
     writePrisonAutomationStateAtomically,
   },

@@ -631,19 +631,19 @@ const DAMAGE_BASELINE_LABELS = Object.freeze({
 const INTERACTION_ACTION_META = Object.freeze({
   UpgradeBiceps: {
     label: "Прокачать бицепс",
-    note: "Выбираются друзья с наибольшим авторитетом. Каждая цель используется один раз за игровой день; завершённые цели пропускаются.",
+    note: "Цели из топ-10 000 по недельному урону: от самых сильных к слабым, включая игроков вне друзей. Каждая цель используется один раз за игровой день; завершённые цели пропускаются.",
   },
   Fight: {
     label: "Подраться",
-    note: "Выбираются друзья с наименьшим авторитетом. Повторные действия с одной целью разрешены.",
+    note: "Цели из топ-10 000 по недельному урону: от слабых к сильным, включая игроков вне друзей. Повторные действия с одной целью разрешены.",
   },
   Harknut: {
     label: "Харкнуть",
-    note: "Выбираются друзья с наименьшим авторитетом. Каждая цель используется один раз за игровой день.",
+    note: "Цели из топ-10 000 по недельному урону: от слабых к сильным, включая игроков вне друзей. Каждая цель используется один раз за игровой день.",
   },
   TossDroj: {
     label: "Подкинуть дрожжи",
-    note: "Выбираются друзья с наименьшим авторитетом. Каждая цель используется один раз за игровой день.",
+    note: "Цели из топ-10 000 по недельному урону: от слабых к сильным, включая игроков вне друзей. Каждая цель используется один раз за игровой день.",
   },
 });
 
@@ -1066,6 +1066,9 @@ const state = {
   prisonDetail: null,
   prisonResult: null,
   prisonDashboard: null,
+  prisonBusinessBusy: false,
+  prisonBusinessNeedsRefresh: false,
+  prisonBusinessMessage: "",
   prisonAutomation: null,
   prisonCountdownTimerId: null,
   zarubaDashboard: null,
@@ -1694,6 +1697,8 @@ function translateUiText(value) {
   if (!/[A-Za-z]/.test(source)) {
     return source;
   }
+  const cache = translateUiText.cache || (translateUiText.cache = new Map());
+  if (cache.has(source)) return cache.get(source);
 
   const parts = source.match(/^(\s*)([\s\S]*?)(\s*)$/);
   const leading = parts ? parts[1] : "";
@@ -1707,9 +1712,12 @@ function translateUiText(value) {
     return `${leading}${UI_TEXT_TRANSLATIONS[text]}${trailing}`;
   }
 
-  for (const [english, russian] of UI_TEXT_REPLACEMENTS) {
+  const patterns = translateUiText.patterns || (translateUiText.patterns = UI_TEXT_REPLACEMENTS.map(([english, russian]) => {
     const escaped = english.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const pattern = new RegExp(/^[A-Za-z0-9_]+$/.test(english) ? `\\b${escaped}\\b` : escaped, "gi");
+    return [pattern, russian];
+  }));
+  for (const [pattern, russian] of patterns) {
     text = text.replace(pattern, russian);
   }
 
@@ -1742,7 +1750,10 @@ function translateUiText(value) {
     .replace(/\bcombo\b/gi, "комбо")
     .replace(/\bMSK\b/g, "МСК");
 
-  return `${leading}${text}${trailing}`;
+  const result = `${leading}${text}${trailing}`;
+  if (cache.size >= 512) cache.delete(cache.keys().next().value);
+  cache.set(source, result);
+  return result;
 }
 
 function localizeUiTree(root = document.body) {
@@ -1790,8 +1801,16 @@ function localizeUiTree(root = document.body) {
 
 function initializeRussianUi() {
   localizeUiTree(document.body);
+  const observerOptions = {
+    subtree: true, childList: true, characterData: true,
+    attributes: true, attributeFilter: ["title", "aria-label", "placeholder"],
+  };
   const observer = new MutationObserver((mutations) => {
+    // Translation itself mutates the DOM; do not observe our own writes.
+    observer.disconnect();
+    try {
     for (const mutation of mutations) {
+      if (!mutation.target.isConnected) continue;
       if (mutation.type === "characterData") {
         const node = mutation.target;
         if (!node.parentElement || node.parentElement.closest("script, style, pre, code, textarea")) {
@@ -1804,10 +1823,13 @@ function initializeRussianUi() {
         continue;
       }
       if (mutation.type === "attributes") {
-        localizeUiTree(mutation.target);
+        const value = mutation.target.getAttribute(mutation.attributeName);
+        const translated = translateUiText(value);
+        if (value !== null && translated !== value) mutation.target.setAttribute(mutation.attributeName, translated);
         continue;
       }
       for (const node of mutation.addedNodes) {
+        if (!node.isConnected) continue;
         if (node.nodeType === Node.TEXT_NODE) {
           const translated = translateUiText(node.nodeValue);
           if (translated !== node.nodeValue) {
@@ -1818,14 +1840,11 @@ function initializeRussianUi() {
         }
       }
     }
+    } finally {
+      observer.observe(document.body, observerOptions);
+    }
   });
-  observer.observe(document.body, {
-    subtree: true,
-    childList: true,
-    characterData: true,
-    attributes: true,
-    attributeFilter: ["title", "aria-label", "placeholder"],
-  });
+  observer.observe(document.body, observerOptions);
 }
 
 function formatNumber(value) {
@@ -2062,13 +2081,14 @@ function renderStatGrid(target, items) {
   if (!target) {
     return;
   }
-  target.innerHTML = items.map((item) => `
+  const markup = items.map((item) => `
     <div class="stat-card${item.iconUrl ? " has-icon" : ""}">
       ${item.iconUrl ? `<img class="stat-card-icon" src="${escapeHtml(item.iconUrl)}" alt="" loading="lazy">` : ""}
       <strong>${escapeHtml(translateUiText(item.value))}</strong>
       <span>${escapeHtml(translateUiText(item.label))}</span>
     </div>
   `).join("");
+  if (target.innerHTML !== markup) target.innerHTML = markup;
 }
 
 function setTextIfChanged(target, value) {
@@ -3040,15 +3060,33 @@ function initializeCollapsibleCards() {
       return;
     }
     head.dataset.collapsibleBound = "true";
+    const card = head.parentElement;
+    const title = head.querySelector("h2, h3");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "card-collapse-toggle text-button";
+    const body = document.createElement("div");
+    body.className = "collapsible-card-body";
+    body.id = `card-content-${document.querySelectorAll(".collapsible-card-body").length}`;
+    while (head.nextSibling) body.append(head.nextSibling);
+    card.append(body);
+    button.setAttribute("aria-controls", body.id);
+    const sync = () => {
+      const collapsed = card.classList.contains("is-collapsed");
+      body.hidden = collapsed;
+      button.textContent = collapsed ? "Развернуть" : "Свернуть";
+      button.setAttribute("aria-expanded", String(!collapsed));
+      button.setAttribute("aria-label", `${collapsed ? "Развернуть" : "Свернуть"}: ${title?.textContent || "раздел"}`);
+    };
+    const toggle = () => { card.classList.toggle("is-collapsed"); sync(); };
+    button.addEventListener("click", toggle);
+    head.append(button);
+    sync();
     head.addEventListener("click", (event) => {
       if (event.target.closest("button, a, input, select, textarea, summary")) {
         return;
       }
-      const card = head.parentElement;
-      if (!card) {
-        return;
-      }
-      card.classList.toggle("is-collapsed");
+      toggle();
     });
   });
 }
@@ -4035,7 +4073,6 @@ function applyBossAutomationState(automation, options = {}) {
     renderBossRunQueue();
   }
   updateBossAutoStatus();
-  renderBossAutomationActivity();
   return automation;
 }
 
@@ -4451,12 +4488,30 @@ function bindBossAvatarFallbacks(root) {
       continue;
     }
     image.dataset.fallbackBound = "1";
+    let retryTimer = null;
+    let retries = 0;
+    image.addEventListener("load", () => {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+      image.hidden = false;
+      image.closest(".boss-avatar")?.classList.remove("is-fallback");
+    });
     const markUnavailable = () => {
       image.hidden = true;
       image.closest(".boss-avatar")?.classList.add("is-fallback");
+      if (retryTimer || retries >= 3) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        if (!image.isConnected) return;
+        retries += 1;
+        image.hidden = false;
+        const url = new URL(image.src, window.location.href);
+        url.searchParams.set("retry", String(Date.now()));
+        image.src = url.href;
+      }, 65_000);
     };
-    image.addEventListener("error", markUnavailable, { once: true });
-    if (image.complete && image.naturalWidth === 0) {
+    image.addEventListener("error", markUnavailable);
+    if (image.complete && image.currentSrc && image.naturalWidth === 0) {
       markUnavailable();
     }
   }
@@ -5243,6 +5298,12 @@ function renderJournalEntry(entry) {
 }
 
 function renderLog() {
+  // Keep collecting bounded history, but build its DOM only when it is visible.
+  if (document.hidden || !document.body.classList.contains("journal-open")) {
+    const count = $("#journal-count");
+    if (count) count.textContent = formatNumber(state.logs.length);
+    return;
+  }
   const target = $("#journal-list");
   if (!target) {
     return;
@@ -5356,7 +5417,7 @@ async function apiRequest(method, url, payload, requestOptions = {}) {
       method,
       headers: {},
     };
-    const timeoutMs = Math.max(0, Number(requestOptions.timeoutMs || 0) || 0);
+    const timeoutMs = Math.max(0, Number(requestOptions.timeoutMs ?? (method === "GET" ? 45_000 : 0)) || 0);
     const controller = timeoutMs > 0 ? new AbortController() : null;
     let timeoutId = null;
 
@@ -5405,9 +5466,67 @@ async function apiRequest(method, url, payload, requestOptions = {}) {
   }
 }
 
+async function handleOpenInstance(event) {
+  const buttons = [...document.querySelectorAll("[data-open-instance]")];
+  if (buttons.some((button) => button.disabled)) return;
+  const selection = event?.currentTarget?.closest("[data-instance-controls]")?.querySelector("[data-instance-select]") || $("#instance-select");
+  const port = selection?.value && selection.value !== "new" ? Number(selection.value) : null;
+  const setNote = (text) => document.querySelectorAll("[data-instance-note]").forEach((node) => {
+    node.textContent = text;
+    node.hidden = false;
+  });
+  const feedback = $("#instance-launch-feedback");
+  if (feedback) feedback.hidden = true;
+  // Open synchronously on the click so browser popup blocking does not depend
+  // on how long the new server takes to start. Keep a normal link as fallback.
+  // Existing profiles replace this page, avoiding duplicate polling tabs.
+  const popup = port === null ? window.open("about:blank", "_blank") : null;
+  if (popup) {
+    popup.opener = null;
+    popup.document.title = "Запуск Pbot…";
+    popup.document.body.textContent = "Запускаем отдельный экземпляр Pbot…";
+  }
+  buttons.forEach((button) => { button.disabled = true; button.textContent = "Запускаем…"; });
+  setNote("Запускаем отдельный экземпляр. Текущий аккаунт продолжает работать.");
+  try {
+    const result = await apiRequest("POST", "/api/system/instances/open", port === null ? {} : { port }, { timeoutMs: 70_000 });
+    const url = new URL(result.url);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1") throw new Error("Сервер вернул некорректный адрес экземпляра.");
+    document.querySelectorAll("[data-instance-link]").forEach((link) => {
+      link.href = url.href;
+      link.hidden = false;
+    });
+    if (popup && !popup.closed) popup.location.replace(url.href);
+    if (port !== null) window.location.assign(url.href);
+    const message = result.reused
+      ? "Открыт уже запущенный экземпляр. Его аккаунт и автоматика продолжают работу."
+      : "Экземпляр запущен. При первом запуске войди в другой аккаунт; затем он будет сохранён отдельно.";
+    setNote(popup || port !== null ? message : `${message} Нажми «Перейти в экземпляр», чтобы открыть его.`);
+    appendLog("Отдельный экземпляр Pbot", message);
+    void refreshInstanceList().catch(() => {});
+  } catch (error) {
+    if (popup && !popup.closed) popup.close();
+    setNote(`Не удалось открыть экземпляр: ${error.message || "ошибка"}`);
+    if (feedback) feedback.hidden = false;
+    appendLog("Не удалось открыть экземпляр", error.message || "ошибка");
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; button.textContent = "Открыть выбранный"; });
+  }
+}
+
+async function refreshInstanceList() {
+  const payload = await apiRequest("GET", "/api/system/instances", undefined, { timeoutMs: 5000 });
+  for (const select of document.querySelectorAll("[data-instance-select]")) {
+    const previous = select.value || "new";
+    select.innerHTML = '<option value="new">＋ Новый экземпляр — отдельная сессия</option>'
+      + payload.instances.map((instance) => `<option value="${instance.port}">${escapeHtml(instance.label)}${instance.current ? " · текущий" : ""}</option>`).join("");
+    select.value = previous === "new" || payload.instances.some((item) => String(item.port) === previous) ? previous : "new";
+  }
+}
+
 async function handleServerShutdown() {
   const button = $("#server-shutdown-btn");
-  if (!button || !window.confirm("Stop the local Pbot server and exit? Any active automation will stop.")) {
+  if (!button || !window.confirm("Остановить этот экземпляр Pbot и его автоматику? Остальные экземпляры продолжат работу.")) {
     return;
   }
 
@@ -5466,6 +5585,26 @@ function initializeDrawerNavigation() {
   document.body.classList.remove("drawer-open");
   menu.removeAttribute("inert");
   menu.setAttribute("aria-hidden", "false");
+  const header = $(".hero");
+  const toggle = $("#header-collapse");
+  if (!header || !toggle) return;
+  const apply = (collapsed) => {
+    header.classList.toggle("is-compact", collapsed);
+    $("#header-metrics").hidden = collapsed;
+    $("#header-wallet").hidden = collapsed;
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    toggle.textContent = collapsed ? "Показать ресурсы" : "Свернуть ресурсы";
+  };
+  const compactByDefault = window.matchMedia("(max-width: 760px)").matches;
+  try {
+    const saved = localStorage.getItem("pbot.ui.header.collapsed");
+    apply(saved === null ? compactByDefault : saved === "true");
+  } catch { apply(compactByDefault); }
+  toggle.addEventListener("click", () => {
+    const collapsed = !header.classList.contains("is-compact");
+    apply(collapsed);
+    try { localStorage.setItem("pbot.ui.header.collapsed", String(collapsed)); } catch { /* Keep the local view usable without storage. */ }
+  });
 }
 
 function bindAuthMethodTabs() {
@@ -5499,14 +5638,38 @@ function bindAuthMethodTabs() {
 function bindTabs() {
   const buttons = [...document.querySelectorAll(".tab-button")];
   const panels = [...document.querySelectorAll(".tab-panel")];
+  $("#main-menu").setAttribute("role", "tablist");
+  for (const panel of panels) {
+    panel.id = `panel-${panel.dataset.panel}`;
+    panel.setAttribute("role", "tabpanel");
+    const button = buttons.find(item => item.dataset.tab === panel.dataset.panel);
+    if (button && !button.id) button.id = `tab-${panel.dataset.panel}`;
+    panel.setAttribute("aria-labelledby", button.id);
+  }
+  const sync = () => {
+    for (const item of buttons) {
+      const active = item.classList.contains("is-active");
+      if (!item.id) item.id = `tab-${item.dataset.tab}`;
+      item.setAttribute("role", "tab");
+      item.setAttribute("aria-selected", String(active));
+      item.setAttribute("aria-controls", `panel-${item.dataset.tab}`);
+      item.tabIndex = active ? 0 : -1;
+    }
+    for (const panel of panels) panel.hidden = !panel.classList.contains("is-active");
+    const active = buttons.find(item => item.classList.contains("is-active"));
+    if ($("#workspace-title")) $("#workspace-title").textContent = active?.querySelector("span:last-child")?.textContent || "Pbot";
+  };
+  sync();
 
   for (const button of buttons) {
     button.addEventListener("click", () => {
       const tab = button.dataset.tab;
       buttons.forEach((item) => item.classList.toggle("is-active", item === button));
       panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === tab));
+      sync();
       syncJournalContext(tab === "misc" && state.activeMiscSection === "events" ? "events" : tab);
       void loadActiveTabPage(tab).catch(() => null);
+      if (tab === "system") void refreshInstanceList().catch(() => {});
       const eventsSectionActive = tab === "misc" && state.activeMiscSection === "events";
       if (!eventsSectionActive && state.letsCookPollTimerId) {
         clearTimeout(state.letsCookPollTimerId);
@@ -5521,6 +5684,16 @@ function bindTabs() {
           10000,
         );
       }
+    });
+    button.addEventListener("keydown", (event) => {
+      const index = buttons.indexOf(button);
+      const next = event.key === "ArrowRight" ? (index + 1) % buttons.length
+        : event.key === "ArrowLeft" ? (index + buttons.length - 1) % buttons.length
+          : event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      buttons[next].focus();
+      buttons[next].click();
     });
   }
 }
@@ -5879,111 +6052,51 @@ async function handleAboutTabOpen() {
 }
 
 function initializeSectionDropdown({
-  dropdownSelector,
-  triggerSelector,
-  toggleSelector,
-  triggerLabelSelector,
-  menuSelector,
-  itemSelector,
-  panelSelector,
-  sectionDataKey,
-  defaultSection,
-  defaultLabel,
-  titlePrefix,
-  onSelect,
+  triggerSelector, toggleSelector, triggerLabelSelector, menuSelector,
+  itemSelector, panelSelector, sectionDataKey, defaultSection, titlePrefix, onSelect,
 }) {
-  const dropdown = $(dropdownSelector);
   const trigger = $(triggerSelector);
-  const toggle = $(toggleSelector);
-  const triggerLabel = $(triggerLabelSelector);
   const menu = $(menuSelector);
-  if (!dropdown || !trigger || !toggle || !triggerLabel || !menu) {
-    return;
-  }
-
+  if (!trigger || !menu) return;
   const items = [...menu.querySelectorAll(itemSelector)];
   const panels = [...document.querySelectorAll(panelSelector)];
-  const setOpen = (open) => {
-    dropdown.classList.toggle("is-open", open);
-    menu.hidden = !open;
-    toggle.setAttribute("aria-expanded", String(open));
-  };
-  const showSection = (selectedSection) => {
-    const selectedItem = items.find((item) => item.dataset[sectionDataKey] === selectedSection);
-    const selectedLabel = selectedItem ? selectedItem.textContent.trim() : defaultLabel;
-    panels.forEach((panel) => {
-      panel.hidden = panel.dataset[sectionDataKey] !== selectedSection;
+  $(toggleSelector).hidden = true;
+  menu.hidden = false;
+  $(triggerLabelSelector).textContent = titlePrefix;
+  const showSection = (section) => {
+    panels.forEach((panel, index) => {
+      panel.hidden = panel.dataset[sectionDataKey] !== section;
+      if (!panel.id) panel.id = sectionDataKey + '-panel-' + index;
+      panel.setAttribute('aria-labelledby', sectionDataKey + '-tab-' + panel.dataset[sectionDataKey]);
     });
     items.forEach((item) => {
-      const active = item.dataset[sectionDataKey] === selectedSection;
-      item.classList.toggle("is-active", active);
-      if (active) {
-        item.setAttribute("aria-current", "page");
-      } else {
-        item.removeAttribute("aria-current");
-      }
+      const selected = item.dataset[sectionDataKey] === section;
+      item.id = sectionDataKey + '-tab-' + item.dataset[sectionDataKey];
+      item.setAttribute('role', 'tab');
+      item.setAttribute('aria-selected', String(selected));
+      item.removeAttribute('aria-current');
+      item.setAttribute('aria-controls', panels.filter(panel => panel.dataset[sectionDataKey] === item.dataset[sectionDataKey]).map(panel => panel.id).join(' '));
+      item.tabIndex = selected ? 0 : -1;
+      item.classList.toggle('is-active', selected);
     });
-    triggerLabel.textContent = selectedLabel;
-    trigger.title = `${titlePrefix} · ${selectedLabel}`;
-    toggle.setAttribute("aria-label", `Открыть список разделов вкладки «${selectedLabel}»`);
-    onSelect?.(selectedSection);
+    onSelect?.(section);
   };
-
-  trigger.addEventListener("click", () => {
-    setOpen(false);
-  });
-  toggle.addEventListener("click", () => {
-    setOpen(menu.hidden);
-  });
-  toggle.addEventListener("keydown", (event) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-      return;
-    }
-    event.preventDefault();
-    if (menu.hidden) {
-      toggle.click();
-    } else {
-      setOpen(true);
-    }
-    const activeIndex = Math.max(0, items.findIndex((item) => item.classList.contains("is-active")));
-    const targetIndex = event.key === "ArrowUp" ? items.length - 1 : activeIndex;
-    items[targetIndex]?.focus();
-  });
-  items.forEach((item) => {
-    item.addEventListener("click", () => {
+  items.forEach((item, index) => {
+    item.addEventListener('click', () => {
       showSection(item.dataset[sectionDataKey]);
-      setOpen(false);
-      trigger.click();
-      trigger.focus();
+      if (!trigger.classList.contains('is-active')) trigger.click();
+    });
+    item.addEventListener('keydown', (event) => {
+      const next = event.key === 'ArrowRight' ? (index + 1) % items.length
+        : event.key === 'ArrowLeft' ? (index + items.length - 1) % items.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1;
+      if (next < 0) return;
+      event.preventDefault();
+      items[next].focus();
+      items[next].click();
     });
   });
-  menu.addEventListener("keydown", (event) => {
-    const currentIndex = items.indexOf(document.activeElement);
-    if (currentIndex < 0 || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    event.preventDefault();
-    let nextIndex = currentIndex;
-    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % items.length;
-    if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + items.length) % items.length;
-    if (event.key === "Home") nextIndex = 0;
-    if (event.key === "End") nextIndex = items.length - 1;
-    items[nextIndex]?.focus();
-  });
-  document.addEventListener("click", (event) => {
-    if (!dropdown.contains(event.target)) {
-      setOpen(false);
-    }
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !menu.hidden) {
-      setOpen(false);
-      toggle.focus();
-    }
-  });
-
-  showSection(items.find((item) => item.classList.contains("is-active"))?.dataset[sectionDataKey] || defaultSection);
-  setOpen(false);
+  showSection(items.find(item => item.classList.contains('is-active'))?.dataset[sectionDataKey] || defaultSection);
 }
 
 function initializeMiscSectionDropdown() {
@@ -6061,7 +6174,7 @@ function updateFriendsActionNote() {
   const meta = INTERACTION_ACTION_META[action];
   $("#friends-action-note").textContent = meta
     ? meta.note
-    : "Используется текущий список друзей с сортировкой по авторитету.";
+    : "Цели выбираются из топ-10 000 по недельному урону.";
 }
 
 function collectFriendsOptions() {
@@ -6310,6 +6423,7 @@ function renderFriendsBatchProgress(payload) {
 
 function renderFriendsResult(payload) {
   state.friendsResult = payload;
+  if (payload.notAttemptedTotal) appendLog("Friends", `Операция остановлена: осталось целей ${formatNumber(payload.notAttemptedTotal)}. Проверьте ошибки сервера перед повторным запуском.`);
   if (payload.friendsTotal !== undefined) {
     state.friendsSummary = {
       ...(state.friendsSummary || {}),
@@ -7642,15 +7756,81 @@ function updatePrisonBusinessCountdown() {
   $("#prison-profit-collect-btn").disabled = !ready;
 }
 
+function renderPrisonBusinesses() {
+  const panel = $("#prison-business-panel");
+  if (!panel) return;
+  panel.hidden = $("#prison-target-type").value !== "prison";
+  if (panel.hidden) return;
+  const prisonId = Number($("#prison-select").value);
+  const dashboard = state.prisonDashboard;
+  const prison = dashboard?.prisons?.find((item) => Number(item.id) === prisonId);
+  const items = dashboard?.business?.items?.filter((item) => item.prisonId === prisonId) || [];
+  $("#prison-business-title").textContent = prison ? `Бизнесы · ${prison.name}` : "Бизнесы выбранной тюрьмы";
+  $("#prison-business-feedback").textContent = state.prisonBusinessMessage || "";
+  $("#prison-business-list").innerHTML = items.length ? items.map((item) => {
+    const disabled = state.prisonBusinessBusy || state.prisonBusinessNeedsRefresh || !item.canUpgrade || prison?.isUnlocked === false;
+    const label = item.maxed ? "Максимальный уровень" : prison?.isUnlocked === false ? "Тюрьма закрыта"
+      : !item.canUpgrade ? "Выкуп недоступен"
+      : `${item.level > 0 ? "Улучшить" : "Выкупить"} · ${formatNumber(item.upgradeCost)} папирос`;
+    const imageUrl = /^https?:\/\//i.test(item.imageUrl || "") ? item.imageUrl : null;
+    return `<article class="prison-business-card">
+      <div class="prison-business-heading">
+        ${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="lazy">` : ""}
+        <div><strong>${escapeHtml(item.title)}</strong><span>Уровень ${escapeHtml(item.level)} / ${escapeHtml(item.maxLevel)}</span></div>
+      </div>
+      <div class="prison-business-income"><strong>+${escapeHtml(formatNumber(item.currentReward))} ${escapeHtml(prisonRewardLabel(item.rewardType))}</strong><span>за сбор</span></div>
+      <p class="inline-note">${item.maxed ? "Бизнес полностью выкуплен" : `Следующий уровень: +${escapeHtml(formatNumber(item.nextReward))} ${escapeHtml(prisonRewardLabel(item.rewardType))} за сбор`}</p>
+      <button type="button" class="action-button action-button-ghost" data-business-upgrade="${escapeHtml(item.businessId)}" data-prison-id="${escapeHtml(prisonId)}" ${disabled ? "disabled" : ""}>${escapeHtml(label)}</button>
+    </article>`;
+  }).join("") : `<p class="inline-note">${dashboard ? "В этой тюрьме нет доступных бизнесов." : "Загружаем бизнесы…"}</p>`;
+}
+
+async function handlePrisonBusinessUpgrade(event) {
+  const button = event.target.closest("[data-business-upgrade]");
+  if (!button || button.disabled || state.prisonBusinessBusy || state.prisonBusinessNeedsRefresh) return;
+  const businessId = Number(button.dataset.businessUpgrade);
+  const prisonId = Number(button.dataset.prisonId);
+  const item = state.prisonDashboard?.business?.items?.find((entry) => entry.prisonId === prisonId && entry.businessId === businessId);
+  if (!item?.canUpgrade) return;
+  state.prisonBusinessBusy = true;
+  state.prisonBusinessMessage = `Выкупаем «${item.title}»…`;
+  renderPrisonBusinesses();
+  try {
+    const result = await apiRequest("POST", "/api/player/business/upgrade", {
+      businessId, prisonId, expectedLevel: item.level, expectedCost: item.upgradeCost,
+    });
+    state.prisonBusinessNeedsRefresh = !result.business;
+    if (result.business && state.prisonDashboard) {
+      state.prisonDashboard.business = result.business;
+      updatePrisonBusinessCountdown();
+    }
+    state.prisonBusinessMessage = result.refreshError || `«${item.title}»: выкуплен уровень ${result.plan.newLevel} за ${formatNumber(result.plan.cost)} папирос.`;
+    appendLog("Выкуп бизнеса", state.prisonBusinessMessage);
+    // The purchase is complete; background balance polling must not hold the buttons.
+    void handleEconomyRefresh().catch(() => {});
+  } catch (error) {
+    state.prisonBusinessNeedsRefresh = true;
+    state.prisonBusinessMessage = `${error.message || "Не удалось подтвердить выкуп."} Обновите тюрьмы перед следующим выкупом.`;
+    appendDiagnosticError("prison", error);
+  } finally {
+    state.prisonBusinessBusy = false;
+    renderPrisonBusinesses();
+  }
+}
+
 function startPrisonCountdownTicker() {
   if (state.prisonCountdownTimerId) {
     clearInterval(state.prisonCountdownTimerId);
   }
-  state.prisonCountdownTimerId = setInterval(updatePrisonBusinessCountdown, 1000);
+  state.prisonCountdownTimerId = setInterval(() => {
+    if (!document.hidden && document.querySelector('[data-panel="prison"]')?.classList.contains("is-active")) updatePrisonBusinessCountdown();
+  }, 1000);
 }
 
 function renderPrisonDashboard(payload, options = {}) {
   state.prisonDashboard = payload;
+  if (state.prisonBusinessNeedsRefresh) state.prisonBusinessMessage = "";
+  state.prisonBusinessNeedsRefresh = false;
   const automation = payload.automation || {};
   if (options.syncControls !== false) {
     $("#prison-target-type").value = automation.targetType === "master" ? "master" : "prison";
@@ -7674,6 +7854,7 @@ function renderPrisonDashboard(payload, options = {}) {
 
   const business = payload.business || {};
   updatePrisonBusinessCountdown();
+  renderPrisonBusinesses();
 
   renderPrisonCollectionSummary();
 
@@ -9031,6 +9212,11 @@ function updateBossRunQueueExcludeSummary(
     : selectedText;
 }
 
+function formatBossAutoQueueRuleSummary(rule) {
+  const combo = rule.combo === "auto" ? "авто" : rule.combo === "none" ? "нет" : formatComboModeLabel(rule.combo);
+  return `Комбо: ${combo} · ${rule.autoKillSolo ? "автоубийство" : "без автоубийства"}`;
+}
+
 function renderBossRunQueueExcludeList(options = {}) {
   const list = $("#boss-run-queue-exclude-list");
   if (!list) {
@@ -9055,6 +9241,8 @@ function renderBossRunQueueExcludeList(options = {}) {
     return;
   }
 
+  const openRules = new Set([...list.querySelectorAll("details[data-boss-rules][open]")]
+    .map((node) => Number(node.dataset.bossRules)));
   list.innerHTML = sections.flatMap((section) => [
     `<div class="boss-exclude-section">${escapeHtml(section.label)}</div>`,
     ...section.items.map((item) => {
@@ -9072,12 +9260,15 @@ function renderBossRunQueueExcludeList(options = {}) {
             </span>
           </label>
           ${renderBossExcludeModeSelect(item, bossId, modeOverrides, Boolean(selectedIds && selectedIds.has(bossId)))}
-          <div class="boss-exclude-rules">
+          <details class="boss-exclude-rules" data-boss-rules="${bossId}"${openRules.has(bossId) ? " open" : ""}>
+            <summary aria-label="Правила боя: ${escapeHtml(item.title || String(bossId))}">${escapeHtml(formatBossAutoQueueRuleSummary(rule))}</summary>
+            <div class="boss-exclude-rules-body">
             <label class="field"><span>Комбо</span><select class="boss-exclude-mode js-boss-exclude-combo" data-boss-id="${bossId}">
               ${[["auto", "Автоматически — по сохранённому"], ["none", "Не пробивать"], ["pacansky", "Пацанское"], ["blotnoy", "Блатное"], ["avtoritetny", "Авторитетное"], ["vorovskoy", "Воровское"]].map(([value, label]) => `<option value="${value}"${rule.combo === value ? " selected" : ""}>${label}</option>`).join("")}
             </select></label>
             <label class="toggle"><input class="js-boss-exclude-solo" data-boss-id="${bossId}" type="checkbox"${rule.autoKillSolo ? " checked" : ""}><span>Убивать «в одного» автоматически</span></label>
-          </div>
+            </div>
+          </details>
         </div>
       `;
     }),
@@ -9157,6 +9348,8 @@ function handleBossRunQueueExcludeChange(event) {
     else rule.autoKillSolo = ruleTrigger.checked;
     state.bossQueueSettings = { ...settings, rulesByBossId: { ...settings.rulesByBossId, [id]: rule } };
     persistBossQueueSettings();
+    const summary = ruleTrigger.closest?.(".boss-exclude-rules")?.querySelector("summary");
+    if (summary) summary.textContent = formatBossAutoQueueRuleSummary(resolveBossAutoQueueRule(id));
     renderBossRunQueue();
     return;
   }
@@ -10505,13 +10698,11 @@ function renderBossRunQueue() {
     </div>
   `);
 
-    renderStatGrid($("#boss-run-queue-summary"), [
-      { label: "В очереди", value: formatNumber(state.bossRunQueue.length) },
-      { label: "Суммарное HP", value: formatBossCompactNumber(totalQueuedHp) },
-      { label: "Можно победить", value: formatNumber(autoPlan.entries.length) },
-      { label: "Выбрано", value: formatNumber(selectedIds.size) },
-      { label: "Охват автосбора", value: "выбранные боссы" },
-    ]);
+  renderStatGrid($("#boss-run-queue-summary"), [
+    { label: "В очереди", value: formatNumber(state.bossRunQueue.length) },
+    { label: "Суммарное HP", value: formatBossCompactNumber(totalQueuedHp) },
+    { label: "Доступно для автосбора", value: formatNumber(autoPlan.entries.length) },
+  ]);
   const note = $("#boss-run-queue-note");
   if (note) {
     const modeCount = autoPlan.modeOverrides instanceof Map ? autoPlan.modeOverrides.size : 0;
@@ -11469,7 +11660,7 @@ function renderBossFightBars() {
       <div class="fight-bar-track">
         <span class="fight-bar-fill fight-bar-fill-damage" style="width: ${damagePercent.toFixed(2)}%;"></span>
       </div>
-      <div class="fight-bar-meta">${escapeHtml(damageFull)}${hpMax ? ` of ${escapeHtml(formatNumber(hpMax))}` : ""}</div>
+      <div class="fight-bar-meta">${escapeHtml(damageFull)}${hpMax ? ` из ${escapeHtml(formatNumber(hpMax))}` : ""}</div>
     </div>
   `;
 }
@@ -12734,8 +12925,9 @@ function renderBossCombatAction(item, hasActiveFight) {
   const buyMarkup = isMelee
     ? ""
     : `
-      <span class="boss-weapon-buy-strip" aria-label="Купить ${escapeHtml(label)}">
-        <span class="boss-weapon-buy-label">Купить</span>
+      <details class="boss-weapon-purchase">
+        <summary aria-label="Пополнить запас: ${escapeHtml(label)}">Пополнить запас</summary>
+        <span class="boss-weapon-buy-strip" aria-label="Купить ${escapeHtml(label)}">
         ${BOSS_WEAPON_BUY_BATCH_COUNTS.map((count) => {
           const total = Number(BOSS_FIXED_PRICES[key] || 0) * count;
           const affordable = !Number.isFinite(rubles) || rubles >= total;
@@ -12751,7 +12943,8 @@ function renderBossCombatAction(item, hasActiveFight) {
             >×${count} · ${escapeHtml(formatNumber(total))} ₽</button>
           `;
         }).join("")}
-      </span>
+        </span>
+      </details>
     `;
   return `
     <div class="boss-weapon-pill${isMelee ? " is-melee" : " is-consumable"}" data-weapon="${escapeHtml(key)}">
@@ -12762,7 +12955,6 @@ function renderBossCombatAction(item, hasActiveFight) {
           <span>${escapeHtml(formatBossCompactNumber(item.damage))} урона</span>
           ${inventoryMarkup}
         </span>
-        ${buyMarkup}
       </span>
       <span class="boss-weapon-hit-control">
         ${countSelectMarkup}
@@ -12786,6 +12978,7 @@ function renderBossCombatAction(item, hasActiveFight) {
           >Пробить</button>
         `}
       </span>
+      ${buyMarkup}
     </div>
   `;
 }
@@ -12809,6 +13002,8 @@ function renderBossWeaponPanel(actions) {
   if (!target) {
     return;
   }
+  const openPurchases = new Set([...target.querySelectorAll(".boss-weapon-pill:has(.boss-weapon-purchase[open])")]
+    .map((row) => row.dataset.weapon));
   const selectedCounts = new Map(
     [...target.querySelectorAll(".boss-weapon-pill")]
       .map((row) => [
@@ -12832,6 +13027,9 @@ function renderBossWeaponPanel(actions) {
     ].join("")
     : `<span class="boss-weapon-empty">Нет данных об уроне оружия</span>`);
   if (contentUpdated) {
+    for (const row of target.querySelectorAll(".boss-weapon-pill")) {
+      if (openPurchases.has(row.dataset.weapon)) row.querySelector(".boss-weapon-purchase")?.setAttribute("open", "");
+    }
     for (const [key, value] of selectedCounts) {
       const select = target.querySelector(`.boss-weapon-pill[data-weapon="${key}"] .js-boss-weapon-count`);
       if (select && [...select.options].some((option) => option.value === value)) {
@@ -13444,9 +13642,14 @@ function renderBossCatalog(payload = state.bossDashboard) {
       ...rows,
     ];
   });
-  catalogBody.innerHTML = rows.length > 0
+  const markup = rows.length > 0
     ? rows.join("")
     : `<tr><td colspan="7" class="boss-catalog-empty">По выбранным фильтрам боссов нет.</td></tr>`;
+  // Compare the source markup: localization and image fallbacks modify live HTML.
+  const rendered = renderBossCatalog.rendered || (renderBossCatalog.rendered = new WeakMap());
+  if (rendered.get(catalogBody) === markup && catalogBody.childElementCount > 0) return;
+  catalogBody.innerHTML = markup;
+  rendered.set(catalogBody, markup);
   bindBossAvatarFallbacks(catalogBody);
 }
 
@@ -16144,6 +16347,7 @@ function startBossCountdownTicker() {
     clearInterval(state.bossCountdownTimerId);
   }
   state.bossCountdownTimerId = setInterval(() => {
+    if (document.hidden || !isBossTabActive()) return;
     renderBossLiveSummary();
     updateBossMeleeCooldownUi();
   }, 1000);
@@ -16214,7 +16418,8 @@ async function refreshBossAfterVisibilityResume() {
 function initializeBossVisibilitySync() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") {
-      void refreshBossAfterVisibilityResume();
+      if (isBossTabActive()) void refreshBossAfterVisibilityResume().catch(() => {});
+      renderLog();
     }
   });
 }
@@ -16259,11 +16464,15 @@ function isBossTabActive() {
 }
 
 async function bossAutoTick() {
-  if (state.bossAuto.running) {
+  if (document.hidden || state.bossAuto.running) {
     return;
   }
   state.bossAuto.running = true;
   try {
+    if (!isBossTabActive()) {
+      if (document.body.classList.contains("journal-open")) await refreshBossLogActivityOnly();
+      return;
+    }
     const queueActive = state.bossRunQueue.length > 0
       || state.bossAuto.serverRunning
       || Boolean(state.bossAuto.pendingReward);
@@ -16297,14 +16506,14 @@ function startBossAutoRefresh(options = {}) {
   if (state.bossAuto.timerId) {
     clearInterval(state.bossAuto.timerId);
   }
-  state.bossAuto.timerId = setInterval(bossAutoTick, intervalSec * 1000);
+  state.bossAuto.timerId = setInterval(() => void bossAutoTick().catch(() => {}), intervalSec * 1000);
   state.bossAuto.localIntervalSec = intervalSec;
   if (!silent) {
     appendLog("Boss auto refresh enabled", `${intervalSec}s`);
   }
   updateBossAutoStatus();
   if (!options.skipImmediateTick) {
-    bossAutoTick();
+    void bossAutoTick().catch(() => {});
   }
 }
 
@@ -16421,12 +16630,16 @@ async function refreshFriendsSummary({ silent = false } = {}) {
 }
 
 async function refreshFriendsBatchProgress() {
+  if (state.friendsBatchProgressRefreshing) return;
+  state.friendsBatchProgressRefreshing = true;
   try {
     const payload = await apiRequest("GET", "/api/friends/batch-progress");
     renderFriendsBatchProgress(payload);
     return payload;
   } catch (_error) {
     return null;
+  } finally {
+    state.friendsBatchProgressRefreshing = false;
   }
 }
 
@@ -16436,11 +16649,16 @@ function startFriendsBatchProgressPolling() {
   }
   void refreshFriendsBatchProgress();
   state.friendsBatchPollTimerId = setInterval(() => {
-    void refreshFriendsBatchProgress();
-  }, 500);
+    if (!document.hidden) void refreshFriendsBatchProgress();
+  }, 1500);
 }
 
 async function runWithFriendsBatchProgress(operation) {
+  if (state.friendsBatchRunning) throw new Error("Дождитесь завершения текущей операции с друзьями.");
+  state.friendsBatchRunning = true;
+  const controls = [...document.querySelectorAll("#friends-action-btn, #friends-invite-btn, #friends-accept-btn, #friends-cleanup-btn, #friends-cleanup-preview-btn, #friends-accept-preview-btn")];
+  const disabled = controls.map((button) => button.disabled);
+  controls.forEach((button) => { button.disabled = true; });
   startFriendsBatchProgressPolling();
   try {
     return await operation();
@@ -16450,6 +16668,8 @@ async function runWithFriendsBatchProgress(operation) {
       state.friendsBatchPollTimerId = null;
     }
     await refreshFriendsBatchProgress();
+    controls.forEach((button, index) => { button.disabled = disabled[index]; });
+    state.friendsBatchRunning = false;
   }
 }
 
@@ -16480,19 +16700,19 @@ async function handleFriendsInvites() {
   }
 }
 
-async function handleFriendsAccept() {
-  const options = collectFriendsBatchOptions();
+async function handleFriendsAccept({ dryRun = false } = {}) {
+  const options = { ...collectFriendsBatchOptions(), dryRun };
   setServerStatus(options.dryRun ? "requests preview" : "processing requests", "busy");
   try {
     const payload = await runWithFriendsBatchProgress(() => apiRequest("POST", "/api/friends/accept-requests", options));
     renderFriendsResult(payload);
-    await handleFriendsDamageRefresh({ silent: true, showStatus: false });
+    if (!options.dryRun) await refreshFriendsSummary({ silent: true });
     const overflow = payload.skippedEligibleOverflow
       ? ` · ждут следующей пачки ${formatNumber(payload.skippedEligibleOverflow)}`
       : "";
     appendLog(
       "Friend requests",
-      `${formatNumber(payload.acceptedCount || 0)} принято · ${formatNumber(payload.declinedCount || 0)} отклонено · ${formatNumber(payload.failCount || 0)} ошибок${overflow}`,
+      `${options.dryRun ? "Проверка: " : ""}${formatNumber(payload.acceptedCount || 0)} ${options.dryRun ? "к принятию" : "принято"} · ${formatNumber(payload.declinedCount || 0)} ${options.dryRun ? "к отклонению" : "отклонено"} · неизвестные данные ${formatNumber(payload.skippedUnknownCriteria || 0)} · ${formatNumber(payload.failCount || 0)} ошибок${overflow}`,
     );
     setServerStatus("ready", "ok");
     return payload;
@@ -16507,13 +16727,13 @@ function hasFriendsCleanupCriteria(options) {
   return options.minWeeklyDamage !== undefined || options.minTalents !== undefined;
 }
 
-async function handleFriendsCleanup() {
-  const options = collectFriendsCleanupOptions();
+async function handleFriendsCleanup({ dryRun = false } = {}) {
+  const options = { ...collectFriendsCleanupOptions(), dryRun };
   if (!hasFriendsCleanupCriteria(options)) {
     appendDiagnosticError("friends", new Error("Для чистки укажите порог недельного урона или минимум талантов."));
     return null;
   }
-  const confirmed = window.confirm("Почистить друзей, которые явно не проходят выбранные условия?");
+  const confirmed = options.dryRun || window.confirm("Почистить друзей, которые явно не проходят выбранные условия?");
   if (!confirmed) {
     return null;
   }
@@ -16527,7 +16747,7 @@ async function handleFriendsCleanup() {
       payload.skippedUnknownCriteria ? `неизвестные данные ${formatNumber(payload.skippedUnknownCriteria)}` : "",
       payload.skippedOverflow ? `сверх лимита ${formatNumber(payload.skippedOverflow)}` : "",
     ].filter(Boolean).join(", ");
-    appendLog("Friends cleanup", `${payload.okCount} удалено / ${payload.failCount} с ошибкой${skipped ? ` · пропущено ${skipped}` : ""}`);
+    appendLog("Friends cleanup", `${payload.okCount} ${options.dryRun ? "к удалению (проверка)" : "удалено"} / ${payload.failCount} с ошибкой · личных дел проверено ${formatNumber(payload.talentTotalsLoaded || 0)}${payload.talentTotalsUnchecked ? ` · отложено до следующей пачки ${formatNumber(payload.talentTotalsUnchecked)}` : ""}${skipped ? ` · пропущено ${skipped}` : ""}`);
     setServerStatus("ready", "ok");
     return payload;
   } catch (error) {
@@ -16543,7 +16763,7 @@ async function handleFriendsAction() {
   try {
     const payload = await runWithFriendsBatchProgress(() => apiRequest("POST", "/api/friends/action", options));
     renderFriendsResult(payload);
-    appendLog("Friends action", `${payload.type}: ${payload.okCount} успешно / ${payload.failCount} с ошибкой · друзей: ${formatNumber(payload.friendsTotal)}`);
+    appendLog("Friends action", `${payload.type}: ${payload.okCount} успешно / ${payload.failCount} с ошибкой · игроков в рейтинге: ${formatNumber(payload.rankingTotal)}${payload.selection?.shortfall ? ` · не хватает доступных целей: ${formatNumber(payload.selection.shortfall)}` : ""}`);
     setServerStatus("ready", "ok");
   } catch (error) {
     setServerStatus("action error", "error");
@@ -16552,7 +16772,7 @@ async function handleFriendsAction() {
 }
 
 async function autoAcceptTick() {
-  if (state.friendsAutoAccept.running) {
+  if (state.friendsAutoAccept.running || state.friendsBatchRunning) {
     return;
   }
   state.friendsAutoAccept.running = true;
@@ -16681,6 +16901,8 @@ function renderMiscStashes(stashes, vparit) {
   button.textContent = vparit.running ? "Впаривание…" : "Впарить всё";
   button.setAttribute("aria-busy", vparit.running ? "true" : "false");
   const last = vparit.lastResult;
+  const lastFailed = last && (last.error || Number(last.failed) > 0);
+  const lastFailureMessage = last && (last.error || (last.failures || [])[0]?.message);
   const receivedResources = last && last.rewardsMeasured
     ? [
       Number(last.authority || 0) !== 0 ? `+${formatNumber(last.authority)} авторитета` : null,
@@ -16726,13 +16948,13 @@ function renderMiscStashes(stashes, vparit) {
       </div>
     </div>
   ` : last ? `
-    <div class="misc-vparit-progress ${last.error ? "is-failed" : "is-complete"}">
+    <div class="misc-vparit-progress ${lastFailed ? "is-failed" : "is-complete"}">
       <div class="misc-vparit-progress-head">
         <div>
-          <strong>${last.error ? "Впаривание остановлено" : "Последнее впаривание завершено"}</strong>
+          <strong>${last.error ? "Впаривание остановлено" : lastFailed ? "Впаривание завершено с ошибками" : "Последнее впаривание завершено"}</strong>
           <span>${escapeHtml(`${formatNumber(last.sold)} успешно · ${formatNumber(last.failed)} с ошибкой`)}</span>
         </div>
-        ${buildBadge(last.error ? "ошибка" : "готово", last.error ? "danger" : "success")}
+        ${buildBadge(lastFailed ? "ошибка" : "готово", lastFailed ? "danger" : "success")}
       </div>
       <div class="misc-vparit-progress-track" role="progressbar" aria-label="Прогресс последнего впаривания" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100">
         <span style="width:100%"></span>
@@ -16740,13 +16962,13 @@ function renderMiscStashes(stashes, vparit) {
       <div class="misc-vparit-result">
         ${receivedResources ? `<span>Получено: <strong>${escapeHtml(receivedResources)}</strong></span>` : `<small>${escapeHtml(last.resourceSnapshotError || "В старом запуске ресурс не был сверен.")}</small>`}
         ${Number(last.elapsedMs) > 0 ? `<small>${formatNumber(last.processed)} комплектов за ${escapeHtml(formatBatchDuration(last.elapsedMs))}${Number(last.ratePerSecond) > 0 ? ` · ${Number(last.ratePerSecond).toFixed(2)} компл./с` : ""}</small>` : ""}
-        ${last.error ? `<small>${escapeHtml(last.error)}</small>` : ""}
+        ${lastFailureMessage ? `<small>${escapeHtml(lastFailureMessage)}</small>` : ""}
       </div>
     </div>
   ` : `
     <div class="misc-vparit-empty">
       <strong>Готово к запуску</strong>
-      <span>После старта здесь появятся прогресс, скорость и оставшееся время.</span>
+      <span>Каждый комплект впаривается одним запросом — сразу все доступные копии.</span>
     </div>
   `;
 }
@@ -18517,6 +18739,10 @@ function scheduleVparitPoll() {
 }
 
 async function handleVparitStatusPoll() {
+  if (document.hidden || state.activeMiscSection !== "stashes") {
+    state.miscVparitPollTimerId = setTimeout(() => void handleVparitStatusPoll(), 3000);
+    return;
+  }
   try {
     const vparit = await apiRequest("GET", "/api/misc/stashes/vparit-status");
     const wasRunning = Boolean(state.miscDashboard && state.miscDashboard.vparit && state.miscDashboard.vparit.running);
@@ -18547,6 +18773,10 @@ function scheduleMiscPoll() {
 }
 
 async function handleMiniGameAutomationPoll() {
+  if (document.hidden || state.activeMiscSection !== "games") {
+    scheduleMiscPoll();
+    return;
+  }
   try {
     const automation = await apiRequest("GET", "/api/misc/minigame/automation");
     if (state.miscDashboard && state.miscDashboard.miniGames) {
@@ -19247,6 +19477,11 @@ function renderLetsCookDashboard(payload, options = {}) {
 }
 
 async function handleLetsCookDashboard(options = {}) {
+  if (options.silent && document.hidden) {
+    clearTimeout(state.letsCookPollTimerId);
+    state.letsCookPollTimerId = setTimeout(() => void handleLetsCookDashboard(options), 10000);
+    return;
+  }
   if (!options.silent) setServerStatus("loading event", "busy");
   try {
     const payload = await apiRequest("GET", "/api/events/lets-cook");
@@ -20653,6 +20888,7 @@ async function handleMasterBuyMissing(masterId = null) {
 
 async function handlePrisonTargetChange() {
   populatePrisonTargetSelect();
+  renderPrisonBusinesses();
   state.prisonDetail = null;
   if ($("#prison-target-type").value === "prison") {
     await handlePrisonDetail({ silent: true });
@@ -21449,11 +21685,17 @@ async function bootstrap() {
   $("#auth-gate-login-btn")?.addEventListener("click", () => handleAuthLogin());
   $("#auth-gate-token-login-btn")?.addEventListener("click", () => handleTokenAuthLogin());
   $("#server-shutdown-btn")?.addEventListener("click", handleServerShutdown);
+  document.querySelectorAll("[data-open-instance]").forEach((button) => button.addEventListener("click", handleOpenInstance));
+  document.querySelectorAll("[data-refresh-instances]").forEach((button) => button.addEventListener("click", () => {
+    void refreshInstanceList().catch((error) => appendLog("Список экземпляров недоступен", error.message));
+  }));
 
   $("#friends-collect-btn").addEventListener("click", handleFriendsCollect);
   $("#friends-invite-btn").addEventListener("click", handleFriendsInvites);
   $("#friends-accept-btn").addEventListener("click", handleFriendsAccept);
   $("#friends-cleanup-btn").addEventListener("click", handleFriendsCleanup);
+  $("#friends-cleanup-preview-btn").addEventListener("click", () => handleFriendsCleanup({ dryRun: true }));
+  $("#friends-accept-preview-btn").addEventListener("click", () => handleFriendsAccept({ dryRun: true }));
   $("#friends-summary-refresh-btn").addEventListener("click", () => refreshFriendsSummary());
   $("#friends-action-btn").addEventListener("click", handleFriendsAction);
   $("#friends-action-type").addEventListener("change", updateFriendsActionNote);
@@ -21470,6 +21712,7 @@ async function bootstrap() {
   $("#prison-dry-btn").addEventListener("click", () => handlePrisonRun(true));
   $("#prison-run-btn").addEventListener("click", () => handlePrisonRun(false));
   $("#prison-profit-collect-btn").addEventListener("click", () => handlePrisonMaintenanceAction("profit"));
+  $("#prison-business-list")?.addEventListener("click", handlePrisonBusinessUpgrade);
   $("#prison-target-type").addEventListener("change", handlePrisonTargetChange);
   $("#prison-select").addEventListener("change", handlePrisonTargetChange);
   $("#prison-mode").addEventListener("change", () => renderPrisonAutomationProgress());
@@ -21764,7 +22007,12 @@ async function bootstrap() {
   try {
     const meta = await apiRequest("GET", "/api/meta");
     state.interactionTypes = meta.interactionTypes || [];
+    if (meta.instance) {
+      $("#instance-label").textContent = meta.instance.label;
+      document.title = `Pbot · ${meta.instance.label}`;
+    }
     renderInteractionTypes();
+    void refreshInstanceList().catch(() => {});
     setServerStatus("ready", "ok");
   } catch (error) {
     setServerStatus("meta error", "error");

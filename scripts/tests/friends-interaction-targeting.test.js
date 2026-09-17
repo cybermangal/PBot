@@ -180,7 +180,7 @@ test("friend cleanup compares the exact talent total and skips unavailable summa
   assert.equal(result.skippedUnknownCriteria, 1);
 });
 
-test("incoming requests accept matches and decline every non-match", () => {
+test("incoming requests accept matches, decline explicit failures and leave unknowns pending", () => {
   const criteria = __test.normalizeFriendCriteriaOptions({
     minTalents: 50,
     minWeeklyDamage: 1_000,
@@ -194,7 +194,7 @@ test("incoming requests accept matches and decline every non-match", () => {
   ], criteria, 1);
 
   assert.deepEqual(plan.acceptedTargets.map((item) => item.userId), ["1"]);
-  assert.deepEqual(plan.rejectedTargets.map((item) => item.userId), ["2", "3", "4"]);
+  assert.deepEqual(plan.rejectedTargets.map((item) => item.userId), ["2", "3"]);
   assert.equal(plan.skippedEligibleOverflow, 1);
-  assert.deepEqual(plan.actions.map((item) => item.action), ["accept", "decline", "decline", "decline"]);
+  assert.deepEqual(plan.actions.map((item) => item.action), ["accept", "decline", "decline"]);
 });

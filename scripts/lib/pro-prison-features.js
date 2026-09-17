@@ -1049,7 +1049,7 @@ async function buildZarubaTaskExecutionPlans(client, tasks, automation = {}) {
         const canCollect = Boolean(podogrev && podogrev.available > 0 && podogrev.leftQuota > 0);
         const collectTarget = Math.max(
           0,
-          Math.min(remaining, Number(podogrev && podogrev.leftQuota || 0)),
+          Math.min(remaining, Number(podogrev && podogrev.available || 0), Number(podogrev && podogrev.leftQuota || 0)),
         );
         return {
           ...task,
@@ -1061,9 +1061,8 @@ async function buildZarubaTaskExecutionPlans(client, tasks, automation = {}) {
             available: podogrev ? podogrev.available : 0,
             leftQuota: podogrev ? podogrev.leftQuota : 0,
             collectTarget,
-            exactAmount: true,
             label: canCollect
-              ? `Собрать не больше ${collectTarget} энергии — ровно до цели Зарубы`
+              ? `Собрать подогрев: ${collectTarget} шт. · осталось ${remaining}`
               : "Ждём доступный подогрев или новый дневной лимит",
           }),
         };

@@ -1,4 +1,4 @@
-PBot 1.0.0 — portable InitData package
+PBot 1.1.0 — portable InitData package
 ======================================
 
 This folder intentionally does not include:

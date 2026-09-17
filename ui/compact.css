@@ -1,0 +1,414 @@
+/* Shared density and layout rules. Component artwork remains in styles.css. */
+:root {
+  --bg: #0d1012;
+  --panel: #15191c;
+  --panel-2: #1a1f23;
+  --panel-3: #20262b;
+  --text: #edf2f3;
+  --text-soft: #b4bec4;
+  --text-muted: #98a5ae;
+  --line: #2a3339;
+  --line-strong: #405059;
+  --radius: 10px;
+}
+
+body { background: var(--bg); font-size: 13px; line-height: 1.45; }
+body::before { display: none; }
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; }
+button, summary, a, input, select, textarea { scroll-margin-block: 70px; }
+:is(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.skip-link { position: fixed; top: -80px; left: 16px; z-index: 1000; padding: 10px 16px; background: var(--panel); color: var(--text); }
+.skip-link:focus { top: 10px; }
+.app-shell { width: min(1480px, calc(100% - 32px)); margin: 16px auto 28px; }
+.workspace { min-width: 0; outline: none; }
+
+/* Header: a utility row, then a single resource strip. */
+.hero { grid-template-columns: 1fr; gap: 8px; }
+.hero-main { padding: 10px 14px; gap: 18px; min-height: 60px; border-radius: 10px; background: var(--panel); }
+.brand-lockup { display: flex; align-items: baseline; gap: 14px; }
+.eyebrow { margin: 0; font-size: 13px; letter-spacing: .06em; font-weight: 700; }
+.hero h1 { font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
+.hero-meta { margin: 0; order: 1; }
+.hero-meta-item strong { font-size: 12px; font-weight: 600; }
+.hero-meta-item small { font-size: 10px; }
+.hero-tools { display: flex; align-items: center; gap: 12px; margin-left: auto; order: 2; }
+.hero-tools .journal-toggle { position: static; min-height: 32px; padding: 5px 10px; box-shadow: none; font-size: 12px; font-weight: 600; border-radius: 7px; }
+.hero-status { grid-row: 2; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.hero-status .status-chip { min-height: 52px; padding: 8px; border-radius: 8px; grid-template-columns: 28px minmax(0, 1fr); gap: 6px; }
+.hero-status .status-resource-icon { width: 28px; height: 28px; }
+.hero-status .status-value { font-size: 16px; font-weight: 650; }
+.hero-status .status-label, .dashboard-hero-slot .dashboard-resource-name { font-size: 10px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+.hero-status .status-sub, .hero-status .resource-trend { font-size: 10px; }
+.hero-wallet { grid-row: 3; grid-column: 1; padding: 9px 12px; border-radius: 8px; background: var(--panel); }
+.wallet-heading { min-height: 24px; margin-bottom: 6px; }
+.wallet-heading .status-label { font-size: 10px; font-weight: 600; text-transform: none; }
+.wallet-heading .status-sub { font-size: 10px; }
+.hero .currency-grid { display: grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 4px; overflow: visible; }
+.hero .currency-grid > * { min-width: 0; width: auto; }
+.currency-grid .dashboard-resource-card { min-height: 44px; padding: 6px 8px; border-color: transparent; border-radius: 5px; background: var(--panel-2); }
+.currency-grid .dashboard-resource-name { font-size: 10px; font-weight: 500; text-transform: none; }
+.currency-grid .status-value { font-size: 14px; font-weight: 650; }
+.currency-grid .status-sub, .currency-grid .resource-trend { font-size: 9px; }
+.dashboard-resource-details > summary { font-size: 11px; min-height: 28px; }
+.trend-switch-button { min-height: 28px; font-size: 11px; font-weight: 600; }
+
+/* Keep labels and positions stable; expose sub-sections in the workspace. */
+.tabbar { top: 8px; z-index: 60; margin: 10px 0 12px; padding: 4px; gap: 4px; flex-wrap: nowrap; border-radius: 9px; background: #15191cf5; }
+.tab-button, .tab-dropdown > .tab-button { min-height: 36px; padding: 8px 16px; font-size: 12px; font-weight: 600; border-radius: 6px; }
+.tab-button { flex: 0 1 auto; min-width: 105px; }
+.tab-button:not(.is-active) { border-color: transparent; background: transparent; }
+.tab-button:not(.is-active):hover { background: var(--panel-2); color: var(--text); }
+.tab-button.is-active { border-color: #3d7268; background: #203c37; color: #92efd9; }
+.tab-dropdown { flex: 0 1 auto; min-width: 105px; }
+.tab-dropdown-toggle { display: none; }
+.tab-button[data-tab="system"] { margin-left: auto; }
+.tab-button-about { margin-left: 0; min-width: 85px; }
+.tab-icon { font-size: 13px; opacity: .8; }
+.section-nav { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 0 10px; margin-bottom: 12px; border-bottom: 1px solid var(--line); }
+.section-nav .tab-dropdown-item { display: inline-flex; align-items: center; width: auto; min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: 6px; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; }
+.section-nav .tab-dropdown-item:hover { color: var(--text); background: var(--panel-2); }
+.section-nav .tab-dropdown-item.is-active { color: var(--accent); background: #1a302c; border-color: #31564d; }
+
+/* One spacing and type scale for every workspace. */
+.panel-grid { gap: 12px; align-items: start; }
+.card { padding: 16px; border-radius: 10px; background: var(--panel); box-shadow: none; }
+.card-head { min-height: 28px; margin-bottom: 12px; gap: 12px; }
+.card-head > div:first-child { min-width: 0; }
+.card-head h2, .card h2 { font-size: 17px; font-weight: 650; line-height: 1.3; letter-spacing: -.01em; }
+.card h3 { font-size: 14px; font-weight: 600; line-height: 1.35; }
+.card-head p.card-kicker { margin: 0 0 3px; }
+.card-kicker, .section-kicker { font-size: 10px; font-weight: 600; color: var(--text-muted); letter-spacing: .05em; }
+.card-head p.card-subtitle, .card-subtitle { font-size: 12px; font-weight: 400; line-height: 1.45; color: var(--text-muted); }
+.card-subtitle:empty, .stats-grid:empty, .inline-note:empty { display: none; }
+.card-head-actions, .misc-head-actions { flex-wrap: wrap; gap: 8px; }
+.field-grid { gap: 10px; }
+.field > span, .field > label, .field-label { font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--text-soft); }
+.field :is(input, select), .collection-toolbar :is(input, select) { min-height: 36px; padding: 7px 10px; border-radius: 6px; font-size: 13px; }
+.field small, .inline-note, .muted-copy { font-size: 11px; line-height: 1.45; }
+.field :is(input, select, textarea) { min-width: 0; max-width: 100%; }
+.button-row { gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.action-button { min-height: 36px; padding: 8px 12px; font-size: 12px; font-weight: 600; border-radius: 6px; line-height: 1.3; }
+.action-button-mini { min-height: 30px; padding: 5px 9px; font-size: 11px; }
+.action-button-ghost { background: transparent; color: var(--text-soft); }
+.text-button { min-height: 30px; padding: 4px 7px; font-size: 12px; font-weight: 600; border-radius: 5px; }
+.text-button:not(.text-button-danger) { color: #9ddfce; }
+.action-button:disabled, .text-button:disabled { opacity: .5; cursor: not-allowed; }
+.toggle { min-height: 32px; padding: 6px 8px; font-size: 12px; font-weight: 500; line-height: 1.4; }
+.toggle strong, .source-chip { font-weight: 500; }
+.toggle input { width: 16px; height: 16px; flex: 0 0 16px; }
+.source-chip { min-height: 32px; font-size: 11px; }
+.stats-grid { gap: 6px; }
+.stat-card { min-height: 48px; padding: 8px 10px; border-radius: 6px; background: var(--panel-2); }
+.stat-card strong { font-size: 16px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat-card span, .stat-card small { font-size: 11px; font-weight: 400; }
+.badge { font-size: 10px; font-weight: 600; padding: 3px 7px; }
+.inline-settings { margin-top: 12px; }
+.inline-settings > summary { min-height: 36px; font-size: 12px; font-weight: 500; color: var(--text-soft); }
+.inline-settings-body { padding-top: 8px; }
+.collapsible-card > .card-head::after { display: none; }
+.collapsible-card > .card-head { cursor: default; }
+.card-collapse-toggle { margin-left: auto; flex: 0 0 auto; }
+.collapsible-card-body { min-width: 0; }
+.collapsible-card.is-collapsed { padding-block: 12px; }
+.collapsible-card.is-collapsed > .card-head { margin-bottom: 0; }
+.collapsible-card.is-collapsed > .card-head .card-subtitle { display: none; }
+.table-wrap { max-width: 100%; overflow-x: auto; }
+th { font-size: 10px; font-weight: 600; }
+td { font-size: 12px; }
+
+/* Bosses: a horizontal fight status, followed by direct combat actions. */
+.boss-fight-layout { grid-template-columns: 1fr; gap: 12px; }
+.boss-fight-primary { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, 1fr); gap: 16px; align-items: center; }
+.boss-fight-overview { margin-top: 0; grid-template-columns: 72px minmax(0, 1fr); }
+.boss-active-avatar { width: 72px; height: 72px; }
+.boss-fight-primary .fight-bar-card { padding: 8px 10px; }
+.boss-fight-primary .fight-bars { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.fight-bar-head { flex-wrap: wrap; gap: 4px 8px; }
+.fight-bar-value { font-size: 17px; font-weight: 650; }
+.boss-fight-primary .stat-card { background: transparent; border: 0; padding: 6px; }
+.boss-fight-primary .stats-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.boss-weapon-panel { padding: 10px; background: #101417; border-radius: 8px; }
+.boss-weapon-panel-head, .boss-combat-action-group-title { font-size: 10px; font-weight: 600; letter-spacing: .03em; }
+.boss-combat-action-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.boss-combat-action-group.is-consumable .boss-combat-action-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.boss-weapon-copy > strong { font-size: 12px; font-weight: 600; }
+.boss-weapon-meta { font-size: 10px; }
+.boss-weapon-pill.is-consumable { grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; }
+.boss-weapon-pill.is-consumable .boss-weapon-hit-control { grid-column: auto; justify-content: flex-end; }
+.boss-weapon-purchase { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 4px; }
+.boss-weapon-purchase summary { color: var(--text-muted); font-size: 11px; cursor: pointer; min-height: 26px; align-content: center; }
+.boss-weapon-buy-strip { flex-wrap: wrap; overflow: visible; }
+.boss-weapon-buy-label { width: 100%; font-size: 10px; font-weight: 500; text-transform: none; }
+.boss-weapon-buy-button { font-size: 10px; padding-inline: 4px; }
+.boss-combat-action-button, .boss-needle-button, .boss-weapon-buy-button { min-height: 28px; font-size: 11px; font-weight: 600; }
+.boss-attack-plan-open-button, .damage-calculator-open-button { min-height: 30px; font-size: 11px; font-weight: 600; }
+.boss-live-settings { margin-top: 8px; }
+.boss-queue-workflow { grid-template-columns: 1fr; border: 0; background: transparent; gap: 16px; }
+.boss-queue-compose { min-width: 0; }
+.boss-queue-builder { padding: 12px 0 0; border: 0; display: grid; grid-template-columns: 1.5fr 1fr; gap: 10px 16px; }
+.boss-queue-builder .boss-add-actions, .boss-queue-builder .inline-note { grid-column: 1 / -1; }
+.boss-queue-list { padding: 12px 0 0; border-top: 1px solid var(--line); }
+.boss-queue-plan-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: end; }
+.boss-queue-plan-controls > .field-wide { grid-column: auto; }
+.boss-queue-plan-controls > .boss-queue-preset-management { grid-column: auto; border: 0; padding: 0; }
+.boss-queue-preset-management { max-width: 100%; }
+.boss-queue-plan-controls:has(.boss-queue-preset-management[open]) { grid-template-columns: 1fr; }
+.boss-queue-preset-management summary { min-height: 36px; align-content: center; }
+.boss-queue-settings, .boss-manual-add { margin-top: 8px; }
+.boss-queue-settings .boss-auto-rules { display: grid; grid-template-columns: 1fr 1fr; }
+.boss-exclude-field { grid-column: 1 / -1; }
+.boss-auto-rules-group { align-content: start; }
+.boss-exclude-list { grid-template-columns: repeat(3, minmax(0, 1fr)); max-height: 390px; }
+.boss-exclude-rules { display: block; grid-column: 1 / -1; }
+.boss-exclude-rules summary { color: var(--text-muted); font-size: 11px; cursor: pointer; min-height: 26px; align-content: center; }
+.boss-exclude-rules-body { display: grid; gap: 8px; padding-top: 8px; }
+.boss-queue-workflow .workflow-step { margin: 12px 0 8px; font-size: 12px; }
+.boss-queue-workflow .workflow-step:first-child { margin-top: 0; }
+.boss-picker-grid { grid-template-columns: 1fr 1.3fr; }
+.boss-queue-builder .field-wide { grid-column: auto; }
+.boss-queue-list .section-heading { margin-bottom: 10px; }
+.boss-queue-list .section-kicker { display: none; }
+.boss-queue-list .section-heading h3 { margin: 0; }
+.boss-queue-source-row { align-items: stretch; }
+.boss-queue-table-wrap { margin-top: 10px; max-height: 460px; overflow: auto; }
+.boss-queue-table-wrap:focus-within { outline-offset: 2px; }
+.boss-queue-list .stats-grid { display: flex; flex-wrap: wrap; gap: 8px 24px; margin-bottom: 8px; }
+.boss-queue-list .stats-grid .stat-card { display: flex; align-items: baseline; gap: 8px; padding: 0; border: 0; background: transparent; }
+.boss-queue-list .stats-grid .stat-value { font-size: 15px; }
+.boss-run-queue-item { grid-template-columns: 62px minmax(0, 1fr) auto; align-items: center; padding: 8px; border-radius: 6px; }
+.boss-run-queue-order { display: flex; align-items: center; gap: 6px; }
+.boss-run-queue-order strong { width: 22px; height: 26px; border: 0; font-weight: 600; }
+.boss-run-queue-main { grid-template-columns: minmax(170px, .7fr) minmax(0, 1.4fr); align-items: center; gap: 12px; }
+.boss-run-queue-controls { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: center; }
+.boss-run-queue-controls:has(.queue-solo-kill-field) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.boss-run-queue-controls .queue-inline-stack { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
+.boss-run-queue-controls .queue-inline-stack .queue-toggle { grid-column: 1 / -1; }
+.queue-field > span:first-child { font-size: 10px; font-weight: 500; text-transform: none; }
+.queue-field.queue-status-field > .badge { white-space: normal; line-height: 1.3; }
+.boss-queue-table-wrap { padding: 0; border: 0; background: transparent; }
+.boss-exclude-template-row { grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr); }
+.boss-exclude-template-select { grid-column: auto; }
+.boss-exclude-template-row > .boss-exclude-actions-title { grid-column: 1 / -1; }
+.boss-exclude-template-actions { grid-column: 1 / -1; }
+.field .boss-exclude-panel .boss-exclude-meta { color: var(--text-muted); font-size: 11px; font-weight: 400; }
+.boss-exclude-panel .boss-exclude-rules > summary::after { content: "+"; }
+.boss-exclude-panel .boss-exclude-rules[open] > summary::after { content: "−"; }
+.damage-calculator-config { align-content: start; }
+.boss-combat-auxiliary, .boss-combat-auxiliary:has(.boss-talents-card:not([hidden])) { grid-template-columns: minmax(250px, .7fr) minmax(0, 1fr); margin-top: 10px; }
+.boss-combat-auxiliary .boss-needle-action { padding: 6px 8px; }
+.boss-talents-card { padding: 8px; }
+
+/* Prison: setup on the left, running plan on the right. */
+.prison-workflow { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(0, 1.2fr); gap: 20px; }
+.prison-setup, .prison-plan { min-width: 0; }
+.prison-target-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.prison-target-field-wide { grid-column: auto; }
+.prison-option-grid-primary { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 12px; }
+.prison-option-grid .prison-option-card { background: transparent; border-color: transparent; padding: 4px 0; min-height: 28px; }
+.prison-queue-editor { padding: 0; border: 0; margin-top: 14px; background: transparent; }
+.prison-queue-editor .card-kicker { display: none; }
+.prison-queue-editor .card-head { align-items: flex-start; }
+.prison-plan { border-left: 1px solid var(--line); padding-left: 20px; }
+.prison-profit-strip { margin: 0; padding: 8px 12px; }
+.prison-business-panel { margin-top: 12px; padding-top: 12px; }
+.prison-business-panel > .card-head .card-kicker { display: none; }
+.prison-business-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.prison-collection-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.prison-zone-grid { gap: 8px; }
+
+/* Zaruba: active objectives first; settings never push them down. */
+/* Keep the 4 / 2 / 1 task columns and breakpoints defined in styles.css. */
+.zaruba-task-row { min-width: 0; }
+.zaruba-mode-card { padding: 10px 12px; gap: 6px; min-height: 0; border-radius: 8px; }
+.zaruba-mode-card > span { font-size: 11px; color: var(--text-soft); }
+.zaruba-mode-icon { width: 34px; height: 28px; }
+.zaruba-mode-grid { gap: 8px; margin-top: 10px; }
+.zaruba-rules-section { padding-top: 0; margin-top: 0; border-top: 0; }
+.zaruba-automation-icons { display: none; }
+.zaruba-rules-grid { gap: 8px; margin-top: 10px; }
+.automation-option-card { min-height: 44px; padding: 8px 10px; border-radius: 6px; }
+.automation-option-card strong { font-size: 12px; font-weight: 600; }
+.zaruba-rules-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.zaruba-rules-footer > button { flex: 0 0 auto; width: auto; }
+.zaruba-rules-footer .automation-status-message { flex: 1; font-size: 11px; }
+.zaruba-active-state { padding-top: 0; }
+.zaruba-task-card .card-head { margin-bottom: 8px; }
+.zaruba-activity-list { max-height: 280px; overflow: auto; }
+
+/* Friends: short actions and maintenance left, discovery right. */
+.friends-dashboard-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+.friends-overview-card { grid-column: 1 / -1; }
+.friends-action-card { grid-column: 1; grid-row: 2; }
+.friends-maintenance-card { grid-column: 1; grid-row: 3; }
+.friends-discovery-card { grid-column: 2; grid-row: 2 / span 2; }
+.friends-action-card, .friends-discovery-card { height: auto; min-height: 0; align-self: start; }
+.friends-discovery-card { display: block; }
+.friends-overview-card { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px; }
+.friends-overview-card .card-head { margin: 0; }
+.friends-overview-card .card-subtitle, .friends-overview-card .card-kicker { display: none; }
+.friends-overview-card .stats-grid { min-width: 140px; }
+.friends-primary-action { width: auto; margin-top: 12px; }
+.friends-discovery-card .button-row { border-top: 1px solid var(--line); padding-top: 12px; }
+.maintenance-actions { display: grid; gap: 12px; margin-top: 12px; }
+.maintenance-actions > div { padding-top: 10px; border-top: 1px solid var(--line); }
+.maintenance-actions strong { font-size: 12px; font-weight: 500; color: var(--text-soft); }
+.maintenance-actions .button-row { margin-top: 4px; }
+.friends-damage-section-card { grid-column: 1 / -1; }
+.friends-damage-grid { gap: 10px; }
+
+/* Inventory and secondary workspaces use the same compact surfaces. */
+.bags-summary-strip { gap: 8px; }
+.bags-browser { padding: 12px; border-radius: 8px; background: transparent; }
+.bags-summary-item { min-height: 68px; padding: 10px 12px; border-radius: 8px; }
+.bags-forge { border-color: var(--line-strong); background: var(--panel-2); }
+.bags-list-heading { margin-block: 12px; }
+.bag-card { min-height: 0; padding: 12px; border-radius: 8px; }
+.bag-card-art { max-width: 64px; max-height: 76px; }
+.bags-empty-state { min-height: 90px; padding: 20px; }
+.loot-container-grid { gap: 12px; margin-top: 12px; }
+.loot-container-card { padding: 14px; border-radius: 8px; background: var(--panel-2); }
+.loot-container-card.is-parcel { border-top: 2px solid #4d9989; }
+.loot-container-card.is-baul { border-top: 2px solid #ad9057; }
+.loot-container-card h3 { font-size: 15px; }
+.loot-container-card p { font-size: 12px; }
+.loot-container-summary, .loot-container-status { padding: 10px; }
+.loot-parcel-statistics { margin-top: 10px; }
+.misc-monthly-calendar { gap: 6px; margin-top: 12px; }
+.misc-stash-card { max-width: 960px; width: 100%; }
+.misc-games-grid { align-items: start; gap: 12px; }
+.misc-game-card { padding: 14px; border-radius: 8px; }
+.misc-game-card input, .misc-game-card select { min-height: 32px; font-size: 12px; }
+.collection-toolbar { gap: 10px; }
+.wearable-collection-hero .card-head { margin-bottom: 10px; }
+.wearable-summary-grid, .wearable-special-grid { gap: 8px; }
+.wearable-bonus-summary { padding: 10px 12px; border-radius: 6px; }
+.wearable-category-card { border-radius: 8px; }
+.wearable-piece { border-radius: 6px; }
+.event-rule-list { gap: 8px; }
+.event-rule-list article { padding: 10px; }
+.event-hero-card { padding: 14px; }
+.event-progress-card { min-height: 0; padding: 12px; }
+.event-rules-card p, .event-rules-card span { font-size: 12px; line-height: 1.5; }
+
+/* Account and support: content-sized cards, quiet utilities. */
+[data-panel="system"] > .panel-grid { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+[data-panel="system"] .auth-card { grid-column: 1; grid-row: 1 / span 2; }
+[data-panel="system"] .system-card { grid-column: 2; }
+.danger-zone-content { flex-wrap: wrap; gap: 12px; }
+.danger-zone-card { background: #1c1819; }
+.danger-zone-card .card-kicker { color: #df9e96; }
+.about-header-card { min-height: 0; padding: 14px 16px; }
+.about-support-icons { width: 144px; min-height: 46px; }
+.about-support-icons img { max-height: 40px; }
+.about-resource-links a { min-height: 36px; font-size: 12px; }
+.about-sponsors-empty { min-height: 80px; padding: 24px; }
+.journal-drawer { width: min(540px, 100vw); }
+.journal-drawer :is(input, select) { min-height: 36px; font-size: 12px; }
+.journal-entry { padding: 10px 12px; }
+.journal-entry-message { font-size: 12px; }
+
+@media (min-width: 1180px) {
+  .hero { grid-template-columns: minmax(500px, .8fr) minmax(0, 1.2fr); }
+  .hero-main { grid-column: 1; }
+  .hero-status { grid-column: 2; grid-row: 1; }
+  .hero-wallet { grid-column: 1 / -1; grid-row: 2; }
+  .hero.is-compact { grid-template-columns: 1fr; }
+  .hero-main { gap: 12px; }
+  .hero-tools { gap: 6px; }
+  .boss-combat-action-group.is-melee .boss-combat-action-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 1179px) {
+  .boss-fight-layout { grid-template-columns: 1fr; }
+  .boss-combat-action-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .prison-business-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero-status .status-chip { min-height: 48px; }
+}
+@media (max-width: 900px) {
+  .boss-run-queue-main { grid-template-columns: 1fr; gap: 6px; }
+  .boss-fight-primary { grid-template-columns: 1fr; gap: 8px; }
+  .boss-exclude-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .tabbar { overflow-x: auto; scrollbar-width: thin; }
+  .tab-button, .tab-dropdown { flex: 0 0 auto; min-width: 90px; }
+  .tab-button[data-tab="system"] { margin-left: 0; }
+  .boss-queue-workflow, .prison-workflow { grid-template-columns: 1fr; gap: 16px; }
+  .boss-queue-builder { padding-top: 12px; }
+  .boss-picker-grid { grid-template-columns: 1fr 1fr; }
+  .boss-queue-list { padding: 0; }
+  .prison-plan { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .prison-option-grid-primary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .boss-combat-action-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .boss-run-queue-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .boss-run-queue-order { grid-column: 1; grid-row: 1; }
+  .boss-queue-row-actions { grid-column: 2; grid-row: 1; }
+  .boss-run-queue-main { grid-column: 1 / -1; }
+  .boss-run-queue-controls, .boss-run-queue-controls:has(.queue-solo-kill-field) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .boss-exclude-template-row { grid-template-columns: 1fr; }
+  .boss-queue-plan-controls, .boss-queue-builder, .boss-queue-settings .boss-auto-rules { grid-template-columns: 1fr; }
+  .boss-combat-auxiliary, .boss-combat-auxiliary:has(.boss-talents-card:not([hidden])) { grid-template-columns: 1fr; }
+  .boss-combat-action-group.is-consumable .boss-combat-action-grid { grid-template-columns: 1fr; }
+  .boss-weapon-purchase summary, .boss-exclude-rules summary { min-height: 36px; }
+  .app-shell { width: calc(100% - 20px); margin-top: 10px; }
+  .hero-main { flex-wrap: wrap; gap: 8px 12px; padding: 10px; }
+  .brand-lockup { gap: 10px; }
+  .hero-meta { margin-left: auto; }
+  .hero-tools { width: 100%; justify-content: space-between; margin-left: 0; }
+  .hero-status { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .hero-wallet { padding: 8px; }
+  .hero .currency-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .currency-grid .dashboard-resource-card { min-width: 0; }
+  .wallet-heading { align-items: flex-start; flex-wrap: wrap; }
+  .wallet-heading .status-sub { max-width: 180px; }
+  .tabbar { top: 4px; margin-block: 8px; }
+  .tab-button, .tab-dropdown > .tab-button { min-height: 40px; padding: 8px 12px; }
+  .section-nav { gap: 4px; margin-bottom: 10px; }
+  .section-nav .tab-dropdown-item { min-height: 38px; padding: 7px 10px; }
+  .panel-grid { grid-template-columns: 1fr; gap: 10px; }
+  .card { padding: 12px; }
+  .card-head { flex-wrap: wrap; gap: 8px; }
+  .card-head h2 { font-size: 16px; }
+  .card-head-actions { flex: 1 1 100%; justify-content: flex-start; }
+  .boss-fight-layout, .boss-queue-workflow, .friends-dashboard-layout,
+  [data-panel="system"] > .panel-grid { grid-template-columns: 1fr; }
+  .friends-action-card, .friends-maintenance-card, .friends-discovery-card,
+  [data-panel="system"] .auth-card, [data-panel="system"] .system-card { grid-column: 1; grid-row: auto; }
+  .friends-discovery-card { order: 0; }
+  .friends-overview-card { display: block; }
+  .friends-overview-card .card-head { margin-bottom: 10px; }
+  .prison-option-grid-primary { grid-template-columns: 1fr; }
+  .prison-collection-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .prison-business-list { grid-template-columns: 1fr; }
+  .zaruba-mode-grid { grid-template-columns: 1fr; }
+  .zaruba-mode-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .zaruba-mode-card .zaruba-mode-head { grid-column: 1; }
+  .zaruba-mode-card > .text-button { grid-column: 2; grid-row: 1; }
+  .zaruba-mode-card > span, .zaruba-mode-card > small { grid-column: 1 / -1; }
+  .zaruba-rules-grid { grid-template-columns: 1fr; }
+  .zaruba-rules-footer .automation-status-message { flex-basis: 100%; text-align: left; }
+  .loot-container-grid, .misc-games-grid { grid-template-columns: 1fr; }
+  .loot-parcel-statistics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .about-header-card { flex-wrap: wrap; gap: 12px; }
+  .action-button, .text-button, .toggle { min-height: 36px; }
+  .boss-queue-source-row { flex-wrap: wrap; }
+}
+@media (max-width: 430px) {
+  .boss-fight-primary .fight-bars, .boss-exclude-list { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 16px; }
+  .hero-meta-item { min-width: 0; }
+  .boss-picker-grid, .boss-mode-grid, .prison-target-fields, .friends-primary-fields { grid-template-columns: 1fr; }
+  .boss-fight-overview { grid-template-columns: 56px minmax(0, 1fr); }
+  .boss-active-avatar { width: 56px; height: 56px; }
+  .boss-combat-action-grid, .boss-combat-action-group.is-consumable .boss-combat-action-grid { grid-template-columns: 1fr; }
+  .boss-queue-source-row > * { width: 100%; }
+  .boss-queue-list .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .boss-queue-list .section-heading { align-items: flex-start; flex-wrap: wrap; }
+  .hero .currency-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+}

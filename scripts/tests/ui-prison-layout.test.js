@@ -39,7 +39,7 @@ test("prison controls keep internal scheduling details out of the UI", () => {
 });
 
 test("prison profit and wearable bonuses use compact collection patterns", () => {
-  const controlStart = indexSource.indexOf('class="card control-card full-span prison-control-card"');
+  const controlStart = indexSource.indexOf('class="card full-span prison-income-card"');
   const profitStart = indexSource.indexOf('class="prison-profit-strip"');
   const controlEnd = indexSource.indexOf("</section>", controlStart);
 
