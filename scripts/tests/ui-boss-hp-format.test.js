@@ -40,6 +40,64 @@ function loadBossHpFormatters() {
   return context;
 }
 
+test("damage rewards support tattoos, keys and rubles from live scaling without a queue candidate", () => {
+  const scaling = {
+    enabled: true, thresholds: [10_000_000, 20_000_000, 30_000_000],
+    keyBonusEnabled: true, keyBonusSteps: 1, keyBonusThresholds: [20_000_000, 40_000_000],
+    rublesByDamage: { threshold: 30_000_000, amount: 50 },
+  };
+  const context = { escapeHtml: String, formatBossCompactNumber: String };
+  vm.runInNewContext([
+    extractFunctionSource("formatNumber"),
+    extractFunctionSource("getBossDamageRewardTiers"),
+    extractFunctionSource("formatBossDamageRewards"),
+    extractFunctionSource("renderBossDamageRewards"),
+  ].join("\n"), context);
+  const render = (damage, damageScaling = scaling) => context.renderBossDamageRewards({ personalDamage: damage, damageScaling }, 30_000_000);
+  assert.match(render(9_999_990), /Осталось 10 урона/);
+  assert.match(render(10_000_000), /Наколки: \+1/);
+  assert.match(render(20_000_000), /Порог достигнут/);
+  assert.match(render(30_000_000), /Наколки: \+3 · Ключи: \+1 · Рубли: \+50/);
+  assert.equal((render(30_000_000).match(/class="fight-reward-marker is-reached/g) || []).length, 3);
+  assert.match(render(0), /left: 33.33%/);
+  assert.match(render(0), /left: 100.00%/);
+  assert.equal(render(0, null), "");
+  assert.equal(render(0, {}), "");
+  assert.doesNotMatch(render(0), /fight-bar-card|fight-reward-legend/);
+  assert.doesNotMatch(render(0, { ...scaling, enabled: false, keyBonusEnabled: false }), /Наколки:|Ключи:/);
+  assert.match(render(0, { ...scaling, enabled: false, keyBonusEnabled: false }), /Рубли: \+50/);
+  assert.equal(context.getBossDamageRewardTiers(scaling).length, 3, "same-damage rewards share a marker");
+  assert.equal(context.getBossDamageRewardTiers({ enabled: true, thresholds: [-1, NaN, Infinity, 0] }).length, 0);
+});
+
+test("fight bars put reward markers inside personal damage and keep only two cards", () => {
+  const target = { innerHTML: "" };
+  const live = {
+    activeSession: {}, maxHp: 1_200_000_000, currentHp: 168_000_000, personalDamage: 15_000_000,
+    damageScaling: { enabled: true, thresholds: [10_000_000, 20_000_000, 30_000_000] },
+  };
+  const context = {
+    $: () => target, resolveBossLiveContext: () => live,
+    renderBossSurrenderButton() {}, renderBossActiveAvatar() {}, renderBossNeedleAction() {},
+    escapeHtml: String, formatBossHpValue: String, formatBossCompactNumber: String,
+  };
+  vm.runInNewContext([
+    "formatNumber", "getBossDamageRewardTiers", "formatBossDamageRewards", "renderBossDamageRewards", "renderBossFightBars",
+  ].map(extractFunctionSource).join("\n"), context);
+  context.renderBossFightBars();
+  assert.equal((target.innerHTML.match(/class="fight-bar-card"/g) || []).length, 2);
+  assert.match(target.innerHTML, /fight-bar-fill-damage" style="width: 50.00%/);
+  assert.match(target.innerHTML, /Мой урон[\s\S]*fight-reward-marker/);
+  assert.match(target.innerHTML, /для доп. наград/);
+  live.personalDamage = 40_000_000;
+  context.renderBossFightBars();
+  assert.match(target.innerHTML, /fight-bar-fill-damage" style="width: 100.00%/);
+  live.damageScaling = null;
+  context.renderBossFightBars();
+  assert.doesNotMatch(target.innerHTML, /fight-reward-marker|для доп. наград/);
+  assert.match(target.innerHTML, /fight-bar-fill-damage" style="width: 3.33%/);
+});
+
 test("boss catalog formats pacansky HP with repeated к suffixes", () => {
   const { formatBossPacanskyHp } = loadBossHpFormatters();
 

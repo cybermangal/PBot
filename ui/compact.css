@@ -72,6 +72,7 @@ button, summary, a, input, select, textarea { scroll-margin-block: 70px; }
 .section-nav .tab-dropdown-item { display: inline-flex; align-items: center; width: auto; min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: 6px; color: var(--text-soft); background: transparent; font-size: 12px; font-weight: 500; cursor: pointer; }
 .section-nav .tab-dropdown-item:hover { color: var(--text); background: var(--panel-2); }
 .section-nav .tab-dropdown-item.is-active { color: var(--accent); background: #1a302c; border-color: #31564d; }
+#misc-section-menu .tab-dropdown-item::after { content: none; }
 
 /* One spacing and type scale for every workspace. */
 .panel-grid { gap: 12px; align-items: start; }

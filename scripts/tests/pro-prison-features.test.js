@@ -228,6 +228,52 @@ test("bag opening rechecks state, requires confirmation, and uses the confirmed 
   assert.equal(result.result.reward.name, "Татуировка");
 });
 
+test("Brigade opening bypasses polling and refreshes only its family", async (t) => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "pbot-brigade-refresh-"));
+  t.after(() => fs.rmSync(stateDir, { recursive: true, force: true }));
+  const calls = [];
+  let balance = 10;
+  const client = {
+    zaruba: { wellState: async (options) => {
+      calls.push(["well", options]);
+      return { ok: true, data: { balances: { signet: 9, ore_signet: 31 } } };
+    } },
+    menyala: {
+      state: async (options) => {
+        calls.push(["brigade", options]);
+        return { ok: true, data: { families: { brigade: {
+          balances: { armband: { armband_1: { balance, cap: 20 } } },
+          bags: [{ bagId: "g1", armbandKey: "armband_1", cost: 5 }],
+        } } } };
+      },
+      openBag: async (payload, options) => {
+        calls.push(["open", options]);
+        assert.equal(payload.bagId, "g1");
+        assert.ok(payload.idempotencyKey);
+        balance -= 5;
+        return { ok: true, data: { success: true } };
+      },
+    },
+  };
+  const service = createFeatureServiceForTest(client, stateDir);
+  const before = await service.getBagsDashboard();
+  calls.length = 0;
+  const result = await service.runBagsAction({
+    family: "brigade", action: "open", bagId: "g1", confirmed: true,
+    expectedStateVersion: before.stateVersion,
+  });
+  assert.deepEqual(calls, ["well", "brigade", "open", "brigade"].map((name) => [name, { throttle: false }]));
+  assert.equal(result.dashboard.brigade.bags[0].balance, 5);
+  assert.deepEqual(result.dashboard.zaruba, before.zaruba);
+  assert.deepEqual(result.dashboard.exchange, before.exchange);
+  assert.equal(result.dashboard.stateVersion, (await service.getBagsDashboard()).stateVersion);
+  await assert.rejects(service.runBagsAction({
+    family: "brigade", action: "open", bagId: "g1", confirmed: true,
+    expectedStateVersion: before.stateVersion,
+  }), { code: "state_version_mismatch" });
+  assert.equal(balance, 5);
+});
+
 test("Zaruba bag actions refresh balances without fetching brigade bags twice", async (t) => {
   for (const action of ["open", "exchangeOre"]) {
     await t.test(action, async (t) => {

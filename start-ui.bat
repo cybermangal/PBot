@@ -2,26 +2,16 @@
 setlocal EnableExtensions
 cd /d "%~dp0"
 
-set "NODE_EXE=node"
-where node >nul 2>nul
+call "scripts\resolve-node.bat"
 if not errorlevel 1 goto :run
 
-if exist "%ProgramFiles%\nodejs\node.exe" (
-  set "NODE_EXE=%ProgramFiles%\nodejs\node.exe"
-  goto :run
-)
-if exist "%ProgramFiles(x86)%\nodejs\node.exe" (
-  set "NODE_EXE=%ProgramFiles(x86)%\nodejs\node.exe"
-  goto :run
-)
-
-echo [start-ui] Node.js is not found.
+echo [start-ui] Node.js 20+ with npm is not found.
 echo [start-ui] Run 01-install-requirements.bat first, then try again.
 goto :fail
 
 :run
 echo [start-ui] Starting Pbot. Please keep this window open.
-"%NODE_EXE%" scripts\ui-server.js %*
+"%PBOT_NODE_EXE%" scripts\ui-server.js %*
 set "PBOT_EXIT_CODE=%errorlevel%"
 if "%PBOT_EXIT_CODE%"=="0" exit /b 0
 

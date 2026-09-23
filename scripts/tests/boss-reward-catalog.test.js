@@ -4,6 +4,22 @@ const test = require("node:test");
 const { __test } = require("../lib/ui-service");
 const { __test: bossCatalogTest } = require("../lib/boss-catalog");
 
+test("live bootstrap scaling survives session normalization and active-session view", () => {
+  const { buildActiveSessionView } = require("../lib/boss-runner");
+  const scaling = {
+    enabled: true, thresholds: [10_000_000, 20_000_000, 30_000_000],
+    keyBonusEnabled: false, keyBonusSteps: 0, keyBonusThresholds: [], rublesByDamage: null,
+  };
+  const session = bossCatalogTest.normalizeSession({ bossId: 30, sessionId: "live-fight", personalDamage: 12_000_000 }, scaling);
+  const active = buildActiveSessionView({ account: { activeSession: session }, bosses: [] });
+  assert.deepEqual(active.session.damageScaling, scaling);
+  assert.equal(active.session.bossId, 30);
+  assert.deepEqual(bossCatalogTest.normalizeDamageScaling({
+    ...scaling, thresholds: [100, "200", Infinity, -1, null], privateToken: "must-not-leak",
+    rublesByDamage: { threshold: 300, amount: 10, other: "not-needed" },
+  }), { ...scaling, thresholds: [100, 200], rublesByDamage: { threshold: 300, amount: 10 } });
+});
+
 test("persisted combo item catalogs survive fallback normalization", () => {
   const combo = bossCatalogTest.normalizeCombo({
     length: 25,

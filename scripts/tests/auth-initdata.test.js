@@ -339,9 +339,10 @@ test("the full UI exposes InitData and token login and supports account switchin
 
 test("fresh portable startup waits for InitData before initializing account-scoped services", async () => {
   const rootDir = path.resolve(__dirname, "..", "..");
-  const [serverSource, launcherSource] = await Promise.all([
+  const [serverSource, launcherSource, nodeResolverSource] = await Promise.all([
     fs.readFile(path.join(rootDir, "scripts", "ui-server.js"), "utf8"),
     fs.readFile(path.join(rootDir, "start-ui.bat"), "utf8"),
+    fs.readFile(path.join(rootDir, "scripts", "resolve-node.bat"), "utf8"),
   ]);
 
   assert.match(serverSource, /async function initializeAuthenticatedRuntime\(\)/);
@@ -353,5 +354,6 @@ test("fresh portable startup waits for InitData before initializing account-scop
   assert.match(serverSource, /logEvent\("ui\.server\.starting"[\s\S]*?await initializeAuthenticatedRuntime\(\)/);
   assert.match(launcherSource, /The server stopped with exit code/);
   assert.match(launcherSource, /pause >nul/);
-  assert.match(launcherSource, /%ProgramFiles%\\nodejs\\node\.exe/);
+  assert.match(launcherSource, /call "scripts\\resolve-node\.bat"/);
+  assert.match(nodeResolverSource, /%ProgramFiles%\\nodejs\\node\.exe/);
 });

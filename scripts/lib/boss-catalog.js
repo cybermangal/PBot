@@ -21,7 +21,24 @@ const CATEGORY_IDS = Object.keys(CATEGORY_BY_ID).map((value) => Number(value));
 const BOSS_CATALOG_LATEST_PATH = path.join(ARTIFACTS_DIR, "boss-catalog-latest.json");
 const BOSS_CATALOG_SEED_PATH = path.join(__dirname, "..", "data", "boss-catalog-seed.json");
 
-function normalizeSession(session) {
+function normalizeDamageScaling(scaling) {
+  if (!scaling || typeof scaling !== "object") return null;
+  const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0 ? Number(value) : 0;
+  const thresholds = (values) => Array.isArray(values) ? values.map(positive).filter(Boolean) : [];
+  const rubles = scaling.rublesByDamage;
+  return {
+    enabled: Boolean(scaling.enabled),
+    thresholds: thresholds(scaling.thresholds),
+    keyBonusEnabled: Boolean(scaling.keyBonusEnabled),
+    keyBonusSteps: Math.floor(positive(scaling.keyBonusSteps)),
+    keyBonusThresholds: thresholds(scaling.keyBonusThresholds),
+    rublesByDamage: positive(rubles && rubles.threshold) && positive(rubles && rubles.amount)
+      ? { threshold: positive(rubles.threshold), amount: positive(rubles.amount) }
+      : null,
+  };
+}
+
+function normalizeSession(session, damageScaling = session && session.damageScaling) {
   if (!session || typeof session !== "object") {
     return null;
   }
@@ -43,6 +60,7 @@ function normalizeSession(session) {
     maxSingleHitRaw: session.maxSingleHitRaw ?? null,
     iglaDamage: session.iglaDamage ?? null,
     rewardClaimed: session.rewardClaimed ?? null,
+    damageScaling: normalizeDamageScaling(damageScaling),
   };
 }
 
@@ -1021,7 +1039,7 @@ async function buildBossCatalog(client, options = {}) {
       ? "rate_limited"
       : null;
   const activeSession = bootstrapSuccess
-    ? normalizeSession(bootstrap && bootstrap.session)
+    ? normalizeSession(bootstrap && bootstrap.session, bootstrap && (bootstrap.damageScaling ?? bootstrap.session?.damageScaling))
     : fallbackAccount && fallbackAccount.activeSession
       ? fallbackAccount.activeSession
       : null;
@@ -1115,6 +1133,8 @@ module.exports = {
   buildBossCatalog,
   buildBossLimitsView,
   __test: {
+    normalizeDamageScaling,
+    normalizeSession,
     buildKeySourceCatalog,
     getPersistedKeyRequirement,
     loadFallbackCatalog,

@@ -1,6 +1,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
+const { loadComboWeaponPool } = require("./boss-combo-value");
 const { purchaseMonthlyDay } = require("./monthly-purchase");
 const { createDailyToiletPaperCollector } = require("./daily-toilet-paper");
 const dailyToiletPaperCollector = createDailyToiletPaperCollector({ withContext });
@@ -8076,6 +8077,7 @@ async function prepareFastActiveBossHitPlan(client, options = {}) {
     maxSingleHitRaw: session.maxSingleHitRaw ?? null,
     iglaDamage: session.iglaDamage ?? null,
     rewardClaimed: session.rewardClaimed ?? null,
+    meleeCooldowns: session.meleeCooldowns,
   };
   const selectedBoss = {
     id: bossId,
@@ -13280,11 +13282,19 @@ async function getBossDashboard(options = {}, sessionPath) {
       preferredModes: options.preferredModes || null,
       bossIds: options.bossIds || null,
     });
+    const comboRublesByBossId = new Map((catalog.bosses || []).map((boss) => [Number(boss.id),
+      Object.fromEntries(Object.entries(boss.combos || {}).map(([mode, combo]) => [mode,
+        (Array.isArray(combo?.currencyChoice) ? combo.currencyChoice : [])
+          .filter((currency) => currency && currency.type === "rubles")
+          .reduce((sum, currency) => sum + Math.max(0, Number(currency.amount) || 0), 0),
+      ])),
+    ]));
     const queueWithPrices = {
       ...queue,
       bosses: Array.isArray(queue.bosses)
         ? queue.bosses.map((boss) => ({
             ...boss,
+            comboRewardRubles: comboRublesByBossId.get(Number(boss.id)) || {},
             observedKeyPriceRubles: getObservedKeyPrice(keyPriceCache, boss.keySourceBossId),
             keyPriceRubles: keyPriceMap.has(Number(boss.keySourceBossId))
               ? keyPriceMap.get(Number(boss.keySourceBossId)).priceRubles
@@ -13322,6 +13332,7 @@ async function getBossDashboard(options = {}, sessionPath) {
         }
       : activeSession;
     const automation = await reconcileBossAutomationQueueComboAvailability(catalog);
+    const comboWeaponPool = await loadComboWeaponPool();
 
     return {
       selfUserId,
@@ -13331,6 +13342,7 @@ async function getBossDashboard(options = {}, sessionPath) {
       actions: buildBossActionCatalog(catalog.account && catalog.account.weaponStatsEffective),
       automation: buildBossAutomationView(automation),
       queue: queueWithPrices,
+      comboWeaponPool,
       keyPrices: keyPriceView,
       categories: catalog.categories,
       arrivals: catalog.arrivals,
@@ -14214,21 +14226,37 @@ function estimateBossComboRubles(sequence, counts, cooldowns, options = {}) {
   return total;
 }
 
-async function assertBossComboAffordable(client, sequence, options) {
-  const [playerResponse, weaponResponse, sessionResponse] = await Promise.all([
-    client.players.init(),
-    client.bosses.weapons({ throttle: false, rateLimitRetries: 1 }),
-    client.bosses.checkSession(null, { throttle: false }),
-  ]);
-  const player = getGamePayload(playerResponse) || {};
-  const rubles = asNumber(player.currencies?.rubles ?? player.rubles, null);
+async function assertBossComboAffordable(client, sequence, options, meleeCooldowns = null) {
+  const weaponResponse = await client.bosses.weapons({ throttle: false, rateLimitRetries: 1 });
   const counts = normalizeBossWeaponCounts(weaponResponse);
-  if (!isSuccessfulGameResponse(playerResponse) || !isSuccessfulGameResponse(sessionResponse)
-    || rubles === null || !counts) {
-    throw new Error("Комбо приостановлено: не удалось проверить рубли и запас оружия.");
+  if (!isSuccessfulGameResponse(weaponResponse) || !counts) {
+    if (isBossRateLimitedResponse(weaponResponse)) {
+      await logEvent("boss.combo.affordability_unverified", {
+        resource: "weapons", status: weaponResponse.status ?? null,
+      });
+      return;
+    }
+    throw new Error("Комбо приостановлено: не удалось проверить запас оружия.");
   }
   const required = estimateBossComboRubles(sequence, counts,
-    buildBossMeleeCooldowns({ ...getGamePayload(weaponResponse), ...getGamePayload(sessionResponse) }), options);
+    buildBossMeleeCooldowns({
+      weaponStatsEffective: getGamePayload(weaponResponse),
+      meleeCooldowns,
+    }), options);
+  if (required === 0) return;
+
+  const playerResponse = await client.players.init({ rateLimitRetries: 1 });
+  const player = getGamePayload(playerResponse) || {};
+  const rubles = asNumber(player.currencies?.rubles ?? player.rubles, null);
+  if (!isSuccessfulGameResponse(playerResponse) || rubles === null) {
+    if (isBossRateLimitedResponse(playerResponse)) {
+      await logEvent("boss.combo.affordability_unverified", {
+        resource: "rubles", status: playerResponse.status ?? null, required,
+      });
+      return;
+    }
+    throw new Error("Комбо приостановлено: не удалось проверить рубли.");
+  }
   if (rubles < required) {
     throw new Error(`Комбо приостановлено: на полную последовательность нужно ${required} ₽, доступно ${rubles} ₽.`);
   }
@@ -14342,7 +14370,11 @@ async function hitBoss(options = {}, sessionPath) {
       rewardActivityItem: rewardActivityContext.item,
     };
     if (String(options.comboMode || "").trim() && hasExplicitBossHitTypes(options.types)) {
-      await assertBossComboAffordable(client, plan.sequence, runnerOptions);
+      const meleeCooldowns = plan && plan.startPlan && plan.startPlan.activeSession
+        && plan.startPlan.activeSession.session
+        ? plan.startPlan.activeSession.session.meleeCooldowns
+        : null;
+      await assertBossComboAffordable(client, plan.sequence, runnerOptions, meleeCooldowns);
     }
     let result = await executeBossRunnerLoopWithWeaponDelta(client, plan, runnerOptions);
 

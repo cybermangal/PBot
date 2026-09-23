@@ -1021,8 +1021,9 @@ async function createApiClient(options = {}) {
       bag(bagId) {
         return request("GET", `/api/menyala/bag/${encodeURIComponent(bagId)}`);
       },
-      openBag(payload) {
+      openBag(payload, options = {}) {
         return request("POST", "/api/menyala/open-bag", {
+          ...options,
           json: payload,
         });
       },

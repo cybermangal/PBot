@@ -1702,23 +1702,30 @@ function createProPrisonFeatureService(dependencies) {
     }));
   }
 
-  async function getBagsDashboard(sessionPath, previousDashboard = null, requestOptions = {}) {
+  async function getBagsDashboard(sessionPath, previousDashboard = null, requestOptions = {}, family = "zaruba") {
     return withContext(sessionPath, async ({ client }) => {
       const [zarubaResponse, menyalaResponse] = await Promise.all([
-        client.zaruba.wellState(requestOptions),
-        previousDashboard ? null : client.menyala.state(requestOptions).catch(() => null),
+        previousDashboard && family === "brigade" ? null : client.zaruba.wellState(requestOptions),
+        previousDashboard && family === "zaruba" ? null : client.menyala.state(requestOptions).catch(() => null),
       ]);
-      if (!isSuccessfulResponse(zarubaResponse)) {
+      if (!(previousDashboard && family === "brigade") && !isSuccessfulResponse(zarubaResponse)) {
         throw new Error(`Не удалось получить зарубские сумки (HTTP ${zarubaResponse.status || "?"}).`);
       }
       const dashboard = normalizeBagsDashboard(
         zarubaResponse,
         isSuccessfulResponse(menyalaResponse) ? menyalaResponse : null,
       );
-      // Zaruba mutations do not change brigade bags. Keep the preflight snapshot
-      // instead of making the result wait for an unrelated game request.
+      // Refresh only the mutated family; retain the unrelated preflight state.
       if (previousDashboard) {
-        dashboard.brigade = previousDashboard.brigade;
+        if (family === "brigade") {
+          if (!isSuccessfulResponse(menyalaResponse)) {
+            throw new Error("Не удалось обновить бригадные сумки после открытия.");
+          }
+          dashboard.zaruba = previousDashboard.zaruba;
+          dashboard.exchange = previousDashboard.exchange;
+        } else {
+          dashboard.brigade = previousDashboard.brigade;
+        }
         dashboard.stateVersion = stableVersion({
           exchange: dashboard.exchange,
           zaruba: dashboard.zaruba.groups,
@@ -1742,9 +1749,9 @@ function createProPrisonFeatureService(dependencies) {
       throw new Error("Неизвестное действие с сумками.");
     }
 
-    // Manual Zaruba actions must not sit behind the automation polling queue.
+    // Manual bag actions must not sit behind the automation polling queue.
     // Keep fresh preflight/postflight reads and the mutation coordinator.
-    const requestOptions = family === "zaruba" ? { throttle: false } : {};
+    const requestOptions = { throttle: false };
     const dashboard = await getBagsDashboard(sessionPath, null, requestOptions);
     if (options.expectedStateVersion && options.expectedStateVersion !== dashboard.stateVersion) {
       const error = new Error("Баланс или состояние сумки изменились. Экран уже обновлён — повторите действие.");
@@ -1805,7 +1812,7 @@ function createProPrisonFeatureService(dependencies) {
       }, async () => {
         const response = family === "zaruba"
           ? await client.zaruba.openBag({ mode: zarubaBagModeId(bag.mode), bagId: bag.bagId }, requestOptions)
-          : await client.menyala.openBag({ bagId: bag.bagId, idempotencyKey: randomUUID() });
+          : await client.menyala.openBag({ bagId: bag.bagId, idempotencyKey: randomUUID() }, requestOptions);
         if (!isSuccessfulMutationResponse(response)) {
           throw new Error(`Игровой сервер отклонил открытие сумки (HTTP ${response.status || "?"}).`);
         }
@@ -1820,7 +1827,7 @@ function createProPrisonFeatureService(dependencies) {
         action,
         bag: sanitizeSensitive(bag),
         result: mutation.result.response,
-        dashboard: await getBagsDashboard(sessionPath, family === "zaruba" ? dashboard : null, requestOptions),
+        dashboard: await getBagsDashboard(sessionPath, dashboard, requestOptions, family),
       };
     });
   }

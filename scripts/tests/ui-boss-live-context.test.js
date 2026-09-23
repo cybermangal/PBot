@@ -69,6 +69,20 @@ function createContext({ snapshotSummary, dashboardActive, catalogBosses = [] })
   return context;
 }
 
+test("live polling preserves bootstrap rewards only for the same fight", () => {
+  const damageScaling = { enabled: true, thresholds: [10_000_000, 20_000_000, 30_000_000] };
+  const session = { sessionId: "fight-30", bossId: 30, currentHp: 90_000_000, damageScaling };
+  const context = createContext({
+    snapshotSummary: { hasSession: true, sessionId: "fight-30", bossId: 30, currentHp: 85_000_000, personalDamage: 15_000_000 },
+    dashboardActive: { session, activeBoss: { id: 30 } },
+  });
+  assert.deepEqual(context.resolveBossLiveContext().damageScaling, damageScaling);
+  context.state.bossState.snapshot.summary.sessionId = "next-fight-same-boss";
+  assert.equal(context.resolveBossLiveContext().damageScaling, null);
+  context.state.bossState.snapshot.summary.bossId = 31;
+  assert.equal(context.resolveBossLiveContext().damageScaling, null);
+});
+
 test("boss live context ignores a requested boss id from an unreliable state response", () => {
   const context = createContext({
     snapshotSummary: {

@@ -29,12 +29,13 @@ test("manual bag requests bypass queued polling and do not retry a rejected muta
     await client.zaruba.wellState(options);
     await client.menyala.state(options);
     await client.zaruba.openBag({ mode: 1, bagId: "p1" }, options);
+    await client.menyala.openBag({ bagId: "g1", idempotencyKey: "test-key" }, options);
     const rejected = await client.zaruba.exchangeOre({}, options);
     assert.equal(rejected.status, 429);
     assert.equal(rejected.requestAttempts, 1);
-    assert.deepEqual(endpoints.slice(0, 5), [
+    assert.deepEqual(endpoints.slice(0, 6), [
       "/api/zaruba/state", "/api/zaruba/well/state", "/api/menyala/state",
-      "/api/zaruba/open-bag", "/api/zaruba/exchange-ore",
+      "/api/zaruba/open-bag", "/api/menyala/open-bag", "/api/zaruba/exchange-ore",
     ]);
   } finally {
     await Promise.allSettled(pending);

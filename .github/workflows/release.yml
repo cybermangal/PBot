@@ -69,4 +69,4 @@ jobs:
       - name: Publish GitHub release
         shell: pwsh
         run: |
-          gh release create $env:TAG "${{ steps.package.outputs.zip }}" --title "PBot $env:TAG" --notes "Изменения дизайна, исправление производительности, параллельные сессии"
+          gh release create $env:TAG "${{ steps.package.outputs.zip }}" --title "PBot $env:TAG" --generate-notes

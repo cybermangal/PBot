@@ -10428,6 +10428,84 @@ function renderBossComboModeMarks(modes, bossId) {
   `;
 }
 
+function estimateBossComboValue(sequence, weaponPool, rewardRubles = 0) {
+  if (!Array.isArray(sequence) || sequence.length === 0 || !weaponPool?.weapons) return null;
+  const counts = Object.fromEntries([...BOSS_COMBO_ACTION_KEYS].map((key) => [key, 0]));
+  for (const action of sequence) {
+    if (!Object.hasOwn(counts, action)) return null;
+    counts[action] += 1;
+  }
+  const meleeHits = [...BOSS_MELEE_ACTION_KEYS].reduce((sum, key) => sum + counts[key], 0);
+  const distinctMelee = [...BOSS_MELEE_ACTION_KEYS].filter((key) => counts[key] > 0).length;
+  const rublesReady = Math.max(0, meleeHits - distinctMelee) * BOSS_FIXED_PRICES.restoreMelee;
+  const weaponCosts = [...BOSS_WEAPON_ACTION_KEYS].reduce(
+    (sum, key) => sum + counts[key] * BOSS_FIXED_PRICES[key], 0,
+  );
+  const netWeapons = {};
+  let netWeaponValue = 0;
+  for (const key of BOSS_WEAPON_ACTION_KEYS) {
+    const expected = Number(weaponPool.weapons[key]?.mean);
+    if (!Number.isFinite(expected)) return null;
+    netWeapons[key] = expected - counts[key];
+    netWeaponValue += netWeapons[key] * BOSS_FIXED_PRICES[key];
+  }
+  const returned = Math.max(0, Number(rewardRubles) || 0);
+  const netRublesCost = rublesReady - returned;
+  const netRublesReady = -netRublesCost;
+  const netValue = netWeaponValue + netRublesReady;
+  return {
+    counts, netWeapons, rublesReady, rewardRubles: returned, netRublesCost, netRublesReady,
+    weaponCosts, netValue,
+  };
+}
+
+function resolveBossComboValuePool(item, mode, weaponPools) {
+  const pooled = weaponPools?.modes?.[mode];
+  if (pooled?.samples >= 10 && pooled.distinctBosses >= 2) {
+    return { ...pooled, source: "mode" };
+  }
+  const exact = weaponPools?.bosses?.[`${item.id}:${mode}`];
+  return exact?.samples >= 5 ? { ...exact, source: "boss" } : null;
+}
+
+function getBossComboValueEstimates(item, weaponPools) {
+  return resolveBossComboModes(item).map((mode) => {
+    const template = getBossComboTemplate(item.id, mode);
+    const pool = resolveBossComboValuePool(item, mode, weaponPools);
+    const value = template && pool
+      ? estimateBossComboValue(template.sequence, pool, item.comboRewardRubles?.[mode])
+      : null;
+    return { mode, template, pool, value };
+  }).filter((entry) => entry.value)
+    .sort((left, right) => right.value.netValue - left.value.netValue || left.value.netRublesCost - right.value.netRublesCost);
+}
+
+function renderBossComboValueCell(estimates, isTop) {
+  const best = estimates[0];
+  if (!best) return "";
+  const { value, pool, mode } = best;
+  const oneDecimal = (number) => Math.round(number * 10) / 10;
+  const rublesLabel = value.netRublesCost > 0 ? `Расход ${formatNumber(value.netRublesCost)} ₽`
+    : value.netRublesCost < 0 ? `Доход ${formatNumber(-value.netRublesCost)} ₽` : "Рубли в ноль";
+  return `
+    <details class="boss-combo-value${isTop ? " is-top" : ""}">
+      <summary title="Подробности прогноза комбо">
+        <strong>${isTop ? "★ " : ""}${escapeHtml(formatSignedNumber(oneDecimal(value.netValue)))} ₽ экв.</strong>
+        <span>Яд ${escapeHtml(formatSignedNumber(oneDecimal(value.netWeapons.poison)))}</span>
+        <small>${escapeHtml(rublesLabel)}</small>
+      </summary>
+      <div class="boss-combo-value-details">
+        <strong>${escapeHtml(formatComboModeLabel(mode))}</strong>
+        <span>Награда: ≈${escapeHtml(oneDecimal(pool.weapons.poison.mean))} яд, ${escapeHtml(oneDecimal(pool.weapons.gunshot.mean))} самопал, ${escapeHtml(oneDecimal(pool.weapons.knife.mean))} финка, ${escapeHtml(formatNumber(value.rewardRubles))} ₽.</span>
+        <span>Удары: ${escapeHtml(value.counts.poison)} яд, ${escapeHtml(value.counts.gunshot)} самопал, ${escapeHtml(value.counts.knife)} финка.</span>
+        <span>Рубли: откаты ${escapeHtml(formatNumber(value.rublesReady))} ₽ − награда ${escapeHtml(formatNumber(value.rewardRubles))} ₽ = ${escapeHtml(rublesLabel.toLowerCase())}. Первые обычные удары считаются готовыми.</span>
+        <span>Чистый итог: ${escapeHtml(formatSignedNumber(oneDecimal(value.netWeapons.poison)))} яд, ${escapeHtml(formatSignedNumber(oneDecimal(value.netWeapons.gunshot)))} самопал, ${escapeHtml(formatSignedNumber(oneDecimal(value.netWeapons.knife)))} финка, ${escapeHtml(formatSignedNumber(value.netRublesReady))} ₽.</span>
+        <span>Выгода ${escapeHtml(formatSignedNumber(oneDecimal(value.netValue)))} ₽ в ценах оружия.</span>
+      </div>
+    </details>
+  `;
+}
+
 function getSelectedBossCandidate() {
   const map = getBossQueueCandidateMap();
   const select = $("#boss-select");
@@ -11505,6 +11583,11 @@ function resolveBossLiveContext() {
     summary,
     activeSession,
     activeBoss,
+    damageScaling: snapshotMatchesActiveBoss && snapshotSummary.damageScaling
+      ? snapshotSummary.damageScaling
+      : activeSession && dashboardSession && isBossSummarySameFightAsSession(activeSession, dashboardSession)
+        ? dashboardSession.damageScaling || null
+        : activeSession && activeSession.damageScaling || null,
     mode,
     sessionId,
     endsAt,
@@ -11608,6 +11691,59 @@ function renderBossNeedleAction(context = resolveBossLiveContext()) {
   }
 }
 
+function getBossDamageRewardTiers(scaling) {
+  if (!scaling || typeof scaling !== "object") return [];
+  const positive = (value) => Number.isFinite(Number(value)) && Number(value) > 0;
+  const segments = [];
+  if (scaling.enabled && Array.isArray(scaling.thresholds)) {
+    for (const threshold of scaling.thresholds.filter(positive)) {
+      segments.push({ damage: Number(threshold), type: "tattoo", amount: 1 });
+    }
+  }
+  if (scaling.keyBonusEnabled && Array.isArray(scaling.keyBonusThresholds)) {
+    const thresholds = scaling.keyBonusThresholds.filter(positive);
+    const steps = positive(scaling.keyBonusSteps) ? Math.floor(Number(scaling.keyBonusSteps)) : thresholds.length;
+    for (const threshold of thresholds.slice(0, steps)) {
+      segments.push({ damage: Number(threshold), type: "key", amount: 1 });
+    }
+  }
+  if (positive(scaling.rublesByDamage?.threshold) && positive(scaling.rublesByDamage?.amount)) {
+    segments.push({ damage: Number(scaling.rublesByDamage.threshold), type: "rubles", amount: Number(scaling.rublesByDamage.amount) });
+  }
+  const tiers = [];
+  const totals = { tattoo: 0, key: 0, rubles: 0 };
+  for (const segment of segments.sort((left, right) => left.damage - right.damage)) {
+    totals[segment.type] += segment.amount;
+    let tier = tiers[tiers.length - 1];
+    if (!tier || tier.personalDamage !== segment.damage) {
+      tier = { personalDamage: segment.damage, rewards: {} };
+      tiers.push(tier);
+    }
+    tier.rewards = { ...totals };
+  }
+  return tiers;
+}
+
+function formatBossDamageRewards(rewards) {
+  return [
+    rewards.tattoo > 0 ? `Наколки: +${formatNumber(rewards.tattoo)}` : "",
+    rewards.key > 0 ? `Ключи: +${formatNumber(rewards.key)}` : "",
+    rewards.rubles > 0 ? `Рубли: +${formatNumber(rewards.rubles)}` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderBossDamageRewards(context, maximum) {
+  const tiers = getBossDamageRewardTiers(context.damageScaling);
+  if (!tiers.length || !Number.isFinite(maximum) || maximum <= 0) return "";
+  const damage = Math.max(0, Number(context.personalDamage) || 0);
+  return tiers.map((tier) => {
+    const reached = damage >= tier.personalDamage;
+    const position = Math.min(100, tier.personalDamage / maximum * 100);
+    const tooltip = `${formatNumber(tier.personalDamage)} урона. Дополнительно за победу: ${formatBossDamageRewards(tier.rewards)}. ${reached ? "Порог достигнут" : `Осталось ${formatNumber(tier.personalDamage - damage)} урона`}`;
+    return `<span class="fight-reward-marker${reached ? " is-reached" : ""}${position <= 50 ? " is-left" : ""}" tabindex="0" style="left: ${position.toFixed(2)}%;" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"><span class="fight-reward-tooltip">${escapeHtml(tooltip)}</span></span>`;
+  }).join("");
+}
+
 function renderBossFightBars() {
   const target = $("#boss-fight-bars");
   if (!target) {
@@ -11635,7 +11771,10 @@ function renderBossFightBars() {
   const hpValue = Number.isFinite(context.currentHp) ? Math.max(0, context.currentHp) : null;
   const personalDamage = Number.isFinite(context.personalDamage) ? Math.max(0, context.personalDamage) : null;
   const hpPercent = hpMax && hpValue !== null ? Math.max(0, Math.min(100, (hpValue / hpMax) * 100)) : 0;
-  const damagePercent = hpMax && personalDamage !== null ? Math.max(0, Math.min(100, (personalDamage / hpMax) * 100)) : 0;
+  const rewardTiers = getBossDamageRewardTiers(context.damageScaling);
+  // Scale to the final reward so low thresholds remain distinguishable on high-HP bosses.
+  const damageMax = rewardTiers.length ? rewardTiers[rewardTiers.length - 1].personalDamage : hpMax;
+  const damagePercent = damageMax && personalDamage !== null ? Math.max(0, Math.min(100, (personalDamage / damageMax) * 100)) : 0;
   const hpCompact = formatBossHpValue(hpValue, hpMax, true);
   const hpFull = formatBossHpValue(hpValue, hpMax, false);
   const damageCompact = personalDamage === null ? "-" : formatBossCompactNumber(personalDamage);
@@ -11657,10 +11796,11 @@ function renderBossFightBars() {
         <span class="fight-bar-label">Мой урон</span>
         <strong class="fight-bar-value" title="${escapeHtml(damageFull)}">${escapeHtml(damageCompact)}</strong>
       </div>
-      <div class="fight-bar-track">
+      <div class="fight-bar-track${rewardTiers.length ? " fight-reward-track" : ""}">
         <span class="fight-bar-fill fight-bar-fill-damage" style="width: ${damagePercent.toFixed(2)}%;"></span>
+        ${renderBossDamageRewards(context, damageMax)}
       </div>
-      <div class="fight-bar-meta">${escapeHtml(damageFull)}${hpMax ? ` из ${escapeHtml(formatNumber(hpMax))}` : ""}</div>
+      <div class="fight-bar-meta">${escapeHtml(damageFull)}${damageMax ? ` из ${escapeHtml(formatNumber(damageMax))}${rewardTiers.length ? " для доп. наград" : ""}` : ""}</div>
     </div>
   `;
 }
@@ -13578,6 +13718,13 @@ function renderBossCatalog(payload = state.bossDashboard) {
     visibleBosses,
     categoryFilter === "all" ? "" : categoryFilter,
   );
+  const comboValues = new Map(catalogBosses.map((item) => [
+    Number(item.id), getBossComboValueEstimates(item, payload.comboWeaponPool),
+  ]));
+  const topComboBossIds = new Set([...comboValues.entries()]
+    .filter(([, estimates]) => estimates[0]?.value.netValue > 0)
+    .sort((left, right) => right[1][0].value.netValue - left[1][0].value.netValue)
+    .slice(0, 3).map(([bossId]) => bossId));
   renderBossCatalogCategoryNav(catalogBosses);
   renderStatGrid($("#boss-queue-summary"), [
     { label: "Visible", value: formatNumber(visibleBosses.length) },
@@ -13595,7 +13742,7 @@ function renderBossCatalog(payload = state.bossDashboard) {
     const rows = section.items.map((item) => {
       const purchaseCount = resolveBossKeyPurchaseCount(item);
       const canBuyKeys = purchaseCount > 0 && canBuyBossKeys(item);
-      const comboCell = renderBossComboModeMarks(resolveBossComboModes(item), item.id);
+      const comboCell = `${renderBossComboModeMarks(resolveBossComboModes(item), item.id)}${renderBossComboValueCell(comboValues.get(Number(item.id)) || [], topComboBossIds.has(Number(item.id)))}`;
       const catalogHp = resolveBossModeHp(item.baseHp, DEFAULT_BOSS_MODE);
       const catalogHpLabel = catalogHp === null ? "" : `HP ${formatBossPacanskyHp(catalogHp)}`;
       const actionCell = canBuyKeys
