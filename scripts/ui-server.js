@@ -21,6 +21,7 @@ const {
   collectBusinessProfit,
   upgradeBusiness,
   cleanupFriends,
+  cancelFriendsBatch,
   collectIds,
   collectPodogrev,
   getBagsDashboard,
@@ -414,6 +415,12 @@ async function handleApi(request, response, url, requestShutdown) {
 
   if (method === "GET" && pathname === "/api/friends/batch-progress") {
     sendJson(response, 200, { ok: true, data: getFriendsBatchProgress() });
+    return;
+  }
+
+  if (method === "POST" && pathname === "/api/friends/batch-cancel") {
+    const options = await readJsonBody(request);
+    sendJson(response, 200, { ok: true, data: cancelFriendsBatch(options.id) });
     return;
   }
 

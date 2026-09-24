@@ -1527,7 +1527,7 @@
                       <input id="friends-cleanup-max" type="number" min="1" value="50">
                     </label>
                   </div>
-                  <p class="inline-note">Одинаковые пороги действуют для входящих заявок и текущих друзей. Входящие с подтверждённым провалом хотя бы одного фильтра будут отклонены. Неизвестные данные и отсутствие в топе не считаются нулевым уроном. Проверка талантов при чистке останавливается после набора пачки.</p>
+                  <p class="inline-note">Одинаковые пороги действуют для входящих заявок и текущих друзей. Входящие с подтверждённым провалом хотя бы одного фильтра будут отклонены. Неизвестные данные и отсутствие в топе не считаются нулевым уроном. Чистка начинает с последней страницы друзей и останавливается после набора пачки. При удалении действует минимальная пауза 600 мс между запросами из-за ограничения частоты игры; проверка без удаления выполняется без этой паузы.</p>
                 </div>
               </details><div class="maintenance-actions"><div><strong>Входящие заявки</strong><div class="button-row"><button id="friends-accept-btn" class="text-button" type="button">Обработать входящие</button><button id="friends-accept-preview-btn" class="text-button" type="button">Проверить входящие</button></div></div><div><strong>Текущие друзья</strong><div class="button-row"><button id="friends-cleanup-btn" class="text-button text-button-danger" type="button">Почистить друзей</button><button id="friends-cleanup-preview-btn" class="text-button" type="button">Проверить чистку</button></div></div></div></section>
 

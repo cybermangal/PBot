@@ -136,7 +136,7 @@ test("friend cleanup selects explicit failures but skips unknown-only profiles",
     { userId: "4", talentsCount: 80, weeklyDamage: 5_000 },
   ], criteria, null);
 
-  assert.deepEqual(result.targets.map((item) => item.userId), ["3", "1"]);
+  assert.deepEqual(result.targets.map((item) => item.userId), ["1", "3"]);
   assert.equal(result.skippedUnknownCriteria, 1);
   assert.equal(result.skippedPassed, 1);
 });

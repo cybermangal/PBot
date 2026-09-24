@@ -123,6 +123,10 @@ const HIGHEST_AUTHORITY_INTERACTION_TYPES = new Set([
   "UpgradeBiceps",
 ]);
 const FRIEND_PROFILE_PAGE_SIZE = 100;
+const FRIEND_CLEANUP_PAGE_SIZE = 1_000;
+// The API client spaces request starts by at least 250 ms. Removing friends
+// at that pace has produced HTTP 429, so space cleanup mutations further.
+const FRIEND_CLEANUP_MIN_REMOVE_DELAY_MS = 600;
 const MAX_FRIEND_PROFILE_PAGES = 512;
 
 const DEFAULT_KEY_PRICE_RUBLES = 6;
@@ -527,6 +531,7 @@ function getFriendsBatchProgressView(batch) {
     id: batch.id,
     kind: batch.kind,
     status: batch.status,
+    cancelRequested: Boolean(batch.cancelRequested),
     stage: batch.stage,
     total,
     completed,
@@ -539,6 +544,8 @@ function getFriendsBatchProgressView(batch) {
     authorityProfilesTotal: batch.authorityProfilesTotal ?? null,
     profilePagesLoaded: batch.profilePagesLoaded ?? null,
     profilePagesTotal: batch.profilePagesTotal ?? null,
+    profileLastPage: batch.profileLastPage ?? null,
+    profileScanPage: batch.profileScanPage ?? null,
     requestPagesLoaded: batch.requestPagesLoaded ?? null,
     incomingRequestsLoaded: batch.incomingRequestsLoaded ?? null,
     talentTotalsLoaded: batch.talentTotalsLoaded ?? null,
@@ -562,6 +569,7 @@ function startFriendsBatch(kind) {
     id: friendsBatchRuntime.nextId,
     kind,
     status: "running",
+    cancelRequested: false,
     stage: "Preparing",
     total: null,
     completed: 0,
@@ -572,6 +580,8 @@ function startFriendsBatch(kind) {
     authorityProfilesTotal: null,
     profilePagesLoaded: null,
     profilePagesTotal: null,
+    profileLastPage: null,
+    profileScanPage: null,
     requestPagesLoaded: null,
     incomingRequestsLoaded: null,
     talentTotalsLoaded: null,
@@ -584,16 +594,22 @@ function startFriendsBatch(kind) {
     finishedAt: null,
     error: null,
   };
+  let resolveCancellation;
+  const cancellation = new Promise((resolve) => { resolveCancellation = resolve; });
+  batch.resolveCancellation = resolveCancellation;
   friendsBatchRuntime.nextId += 1;
   friendsBatchRuntime.active = batch;
 
   const update = (patch = {}) => {
     Object.assign(batch, patch, { updatedAt: new Date().toISOString() });
+    if (batch.cancelRequested && batch.status === "cancelling") batch.stage = "Cancelling";
     return batch;
   };
 
   return {
     update,
+    isCancelled() { return batch.cancelRequested; },
+    wait(delayMs) { return Promise.race([sleep(delayMs), cancellation]); },
     setPlan(total, patch = {}) {
       return update({
         total: Math.max(0, Number(total) || 0),
@@ -618,15 +634,20 @@ function runFriendsBatchSerialized(kind, operation) {
     const batch = friendsBatchRuntime.active;
     try {
       const result = await operation(progress);
+      const cancelled = batch.cancelRequested;
+      const stoppedStatus = result.results?.find((row) => [401, 403, 429].includes(row.status))?.status ?? null;
+      const failed = result.notAttemptedTotal > 0 || stoppedStatus !== null;
       progress.update({
-        status: result.notAttemptedTotal > 0 ? "failed" : "completed",
-        stage: result.notAttemptedTotal > 0 ? "Failed" : "Completed",
-        error: result.notAttemptedTotal > 0 ? "Операция остановлена после ошибки API. Остались необработанные цели." : null,
+        status: cancelled ? "cancelled" : failed ? "failed" : "completed",
+        stage: cancelled ? "Cancelled" : failed ? "Failed" : "Completed",
+        error: cancelled ? null : stoppedStatus === 429
+          ? "Игра ограничила частоту запросов (HTTP 429). Часть действий не выполнена; подождите перед повторным запуском."
+          : failed ? "Операция остановлена после ошибки API. Проверьте результат перед повторным запуском." : null,
         currentTarget: null,
         finishedAtMs: Date.now(),
         finishedAt: new Date().toISOString(),
       });
-      return result;
+      return { ...result, stoppedStatus, cancelled };
     } catch (error) {
       progress.update({
         status: "failed",
@@ -651,6 +672,21 @@ function getFriendsBatchProgress() {
     active: getFriendsBatchProgressView(friendsBatchRuntime.active),
     last: getFriendsBatchProgressView(friendsBatchRuntime.last),
   };
+}
+
+function cancelFriendsBatch(id) {
+  const batch = friendsBatchRuntime.active;
+  if (!batch || Number(id) !== batch.id || !["running", "cancelling"].includes(batch.status)) {
+    return { accepted: false, activeId: batch ? batch.id : null };
+  }
+  if (!batch.cancelRequested) {
+    batch.cancelRequested = true;
+    batch.status = "cancelling";
+    batch.stage = "Cancelling";
+    batch.updatedAt = new Date().toISOString();
+    batch.resolveCancellation();
+  }
+  return { accepted: true, id: batch.id };
 }
 
 function toBool(value, fallback = false) {
@@ -1354,9 +1390,26 @@ function buildAuthSummary(session, options = {}) {
 
 async function getAuthStatus(options = {}, sessionPath) {
   const resolvedSessionPath = resolveSessionPath(sessionPath);
-  const { session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath);
+  let { session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath);
   const baseUrl = resolveBaseUrlForSession(session, options.baseUrl);
-  const auth = buildAuthSummary(session, { sessionExists: exists });
+  let auth = buildAuthSummary(session, { sessionExists: exists });
+
+  if (auth.reason === "access-token-expired-refresh-available") {
+    try {
+      const client = await createApiClient({ sessionPath: resolvedSessionPath, session, baseUrl });
+      await client.refreshAuth();
+      ({ session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath));
+      auth = buildAuthSummary(session, { sessionExists: exists });
+    } catch (error) {
+      logEvent("auth.status.refresh_failed", { error });
+      auth = {
+        ...auth,
+        isActive: false,
+        requiresLogin: true,
+        reason: "refresh-failed",
+      };
+    }
+  }
 
   return {
     sessionPath: resolvedSessionPath,
@@ -9286,6 +9339,7 @@ async function inviteCollected(options = {}, sessionPath) {
     });
 
     for (const target of selectedTargets) {
+      if (batch.isCancelled?.()) break;
       const queuePosition = queuePositionByUserId.get(String(target.userId)) || null;
       if (dryRun) {
         results.push({
@@ -9320,11 +9374,12 @@ async function inviteCollected(options = {}, sessionPath) {
       }
 
       if (delayMs > 0 && target !== selectedTargets[selectedTargets.length - 1]) {
-        await sleep(delayMs);
+        if (batch.wait) await batch.wait(delayMs);
+        else await sleep(delayMs);
       }
     }
 
-    if (selectedTargets.length > 0) {
+    if (results.length > 0) {
       progressState.runs += 1;
     }
     progressState.updatedAt = new Date().toISOString();
@@ -9341,10 +9396,11 @@ async function inviteCollected(options = {}, sessionPath) {
       collectedUniqueTotal: collected.uniqueIds.total,
       requestedTotal: queueTargets.length,
       selectedTotal: selectedTargets.length,
+      notAttemptedTotal: selectedTargets.length - results.length,
       skippedExisting: collected.skippedExisting ?? 0,
       skippedProcessed: queueTargets.length - unprocessedTargets.length,
       existingFriendsTotal: collected.existingFriendsTotal ?? existingFriendIds.size,
-      okCount: dryRun ? selectedTargets.length : results.filter((item) => item.ok).length,
+      okCount: dryRun ? results.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
       dryRun,
       delayMs,
@@ -9355,7 +9411,7 @@ async function inviteCollected(options = {}, sessionPath) {
       progress: {
         key: progressKey,
         resetApplied: resetProgress,
-        runNumber,
+        runNumber: progressState.runs,
         batchSize,
         queueTotal: queueTargets.length,
         queueRangeStart: batchRangeStart,
@@ -9365,7 +9421,7 @@ async function inviteCollected(options = {}, sessionPath) {
         completed: remainingTotal === 0,
         skippedExisting: collected.skippedExisting ?? 0,
         skippedProcessedBeforeRun: queueTargets.length - unprocessedTargets.length,
-        selectedUserIds: selectedTargets.map((item) => String(item.userId)),
+        selectedUserIds: selectedTargets.slice(0, results.length).map((item) => String(item.userId)),
         nextUserIds: nextTargets.map((item) => String(item.userId)),
         nextQueuePositions: nextTargets.map((item) => queuePositionByUserId.get(String(item.userId)) || null),
         processedUserIds: [...progressState.processedUserIds],
@@ -9465,6 +9521,7 @@ async function inviteUsers(options = {}, sessionPath) {
     });
 
     for (const target of selectedTargets) {
+      if (batch.isCancelled?.()) break;
       const queuePosition = results.length + 1;
       const message = buildExplicitInviteMessage(target, options);
       if (dryRun) {
@@ -9496,7 +9553,8 @@ async function inviteUsers(options = {}, sessionPath) {
       batch.completeTarget(target.userId, row.ok === undefined || row.ok);
 
       if (delayMs > 0 && target !== selectedTargets[selectedTargets.length - 1]) {
-        await sleep(delayMs);
+        if (batch.wait) await batch.wait(delayMs);
+        else await sleep(delayMs);
       }
     }
 
@@ -9506,11 +9564,12 @@ async function inviteUsers(options = {}, sessionPath) {
       period: options.period || null,
       requestedTotal: requestedTargets.length,
       selectedTotal: selectedTargets.length,
+      notAttemptedTotal: selectedTargets.length - results.length,
       skippedExisting,
       skippedSelf,
       skippedOverflow,
       existingFriendsTotal: existingFriendIds.size,
-      okCount: dryRun ? selectedTargets.length : results.filter((item) => item.ok).length,
+      okCount: dryRun ? results.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
       dryRun,
       delayMs,
@@ -9547,8 +9606,9 @@ async function loadIncomingFriendRequestCandidates(client, options, selfUserId, 
   const candidatesById = new Map();
   const seenRecords = new Set();
 
-  for (let page = 0; page < maxPages; page += 1) {
+  for (let page = 0; page < maxPages && !batch.isCancelled?.(); page += 1) {
     const response = await client.friends.requests({ page, pageSize });
+    if (batch.isCancelled?.()) break;
     if (!isSuccessfulGameResponse(response)) {
       throw new Error(`Could not load incoming friend requests page ${page + 1}: HTTP ${response ? response.status : "unknown"}`);
     }
@@ -9616,13 +9676,13 @@ async function acceptFriendRequests(options = {}, sessionPath) {
     const criteria = normalizeFriendCriteriaOptions(options);
     const dryRun = criteria.dryRun;
     let candidates = await loadIncomingFriendRequestCandidates(client, options, selfUserId, batch, criteria);
-    if (criteria.needsWeeklyDamage) {
+    if (criteria.needsWeeklyDamage && !batch.isCancelled?.()) {
       batch.update({ stage: "Loading weekly damage" });
       const weeklyDamageByUserId = await loadWeeklyDamageMap(client, criteria.weeklyTopLimit);
       candidates = attachWeeklyDamage(candidates, weeklyDamageByUserId);
     }
 
-    if (criteria.needsTalents || criteria.needsTalentAchievement) {
+    if ((criteria.needsTalents || criteria.needsTalentAchievement) && !batch.isCancelled?.()) {
       const enriched = await attachTalentPointsTotals(client, candidates, batch, criteria);
       candidates = enriched.candidates.map((candidate) => ({
         ...candidate,
@@ -9637,7 +9697,7 @@ async function acceptFriendRequests(options = {}, sessionPath) {
       incomingRequestsLoaded: candidates.length,
     });
 
-    const results = await runFriendTargetBatch(plan.actions, { delayMs }, async (item) => {
+    const results = await runFriendTargetBatch(plan.actions, { delayMs, batch }, async (item) => {
       const { action, target } = item;
       const userId = String(target.userId);
       const criteriaRecord = buildFriendCriteriaRecord(target, target.evaluation);
@@ -9705,45 +9765,55 @@ async function acceptFriendRequests(options = {}, sessionPath) {
   }));
 }
 
-async function loadFriendMaintenanceProfiles(client, friendIds, selfUserId, progress) {
-  const ids = friendIds instanceof Set ? friendIds : new Set();
-  const selfId = selfUserId ? String(selfUserId) : null;
-  const profilesById = new Map();
-  let effectivePageSize = null;
-
-  for (let page = 0; page < MAX_FRIEND_PROFILE_PAGES; page += 1) {
-    const response = await client.friends.profiles(page, { pageSize: FRIEND_PROFILE_PAGE_SIZE });
+async function openFriendCleanupProfilePages(client, batch) {
+  const cached = new Map();
+  let pagesRead = 0;
+  let findingLast = true;
+  const readPage = async (page) => {
+    if (batch.isCancelled?.()) return [];
+    if (cached.has(page)) return cached.get(page);
+    const response = await client.friends.profiles(page, { pageSize: FRIEND_CLEANUP_PAGE_SIZE });
     if (!response || !response.ok) {
       throw new Error(`Could not load friend profiles page ${page + 1}: HTTP ${response ? response.status : "unknown"}`);
     }
-    const pageItems = extractListPayload(response.data);
-    const profilesBeforePage = profilesById.size;
-    for (const item of pageItems) {
-      const candidate = normalizeFriendCandidateRecord(item);
-      if (!candidate.userId || candidate.userId === selfId || (ids.size > 0 && !ids.has(candidate.userId))) {
-        continue;
-      }
-      profilesById.set(candidate.userId, candidate);
-    }
-    if (effectivePageSize === null && pageItems.length > 0) {
-      effectivePageSize = Math.min(FRIEND_PROFILE_PAGE_SIZE, pageItems.length);
-    }
-    progress.update({
-      stage: "Loading friends profiles",
-      authorityProfilesTotal: profilesById.size,
-      profilePagesLoaded: page + 1,
+    const items = extractListPayload(response.data);
+    cached.set(page, items);
+    pagesRead += 1;
+    batch.update({
+      stage: findingLast ? "Finding last friends page" : "Checking friends from last page",
+      profilePagesLoaded: pagesRead,
       profilePagesTotal: null,
     });
-    if (
-      pageItems.length === 0
-      || (effectivePageSize !== null && pageItems.length < effectivePageSize)
-      || (page > 0 && pageItems.length > 0 && profilesById.size === profilesBeforePage)
-    ) {
-      break;
-    }
-  }
+    return items;
+  };
 
-  return profilesById;
+  const first = await readPage(0);
+  if (first.length === 0 || batch.isCancelled?.()) {
+    return { lastPage: -1, profileRowsTotal: 0, readPage };
+  }
+  let lower = 0;
+  let upper = 1;
+  while (upper < MAX_FRIEND_PROFILE_PAGES && !batch.isCancelled?.()) {
+    if ((await readPage(upper)).length === 0) break;
+    lower = upper;
+    upper = Math.min(MAX_FRIEND_PROFILE_PAGES, upper * 2);
+  }
+  if (upper === MAX_FRIEND_PROFILE_PAGES && (await readPage(upper - 1)).length >= first.length) {
+    throw new Error("Friend profile pagination exceeded its page limit.");
+  }
+  while (lower + 1 < upper && !batch.isCancelled?.()) {
+    const middle = Math.floor((lower + upper) / 2);
+    if ((await readPage(middle)).length > 0) lower = middle;
+    else upper = middle;
+  }
+  const lastPage = batch.isCancelled?.() ? -1 : lower;
+  const lastItems = lastPage >= 0 ? await readPage(lastPage) : [];
+  findingLast = false;
+  return {
+    lastPage,
+    profileRowsTotal: lastPage < 0 ? 0 : lastPage * first.length + lastItems.length,
+    readPage,
+  };
 }
 
 function selectFriendCleanupTargets(candidates, criteria, max) {
@@ -9760,6 +9830,7 @@ function selectFriendCleanupTargets(candidates, criteria, max) {
         ...candidate,
         evaluation,
       });
+      if (max !== null && targets.length >= max) break;
       continue;
     }
     if (evaluation.unknown.length > 0) {
@@ -9769,27 +9840,13 @@ function selectFriendCleanupTargets(candidates, criteria, max) {
     skippedPassed += 1;
   }
 
-  targets.sort((left, right) => {
-    const leftDamage = Number(left.weeklyDamage ?? Number.POSITIVE_INFINITY);
-    const rightDamage = Number(right.weeklyDamage ?? Number.POSITIVE_INFINITY);
-    if (leftDamage !== rightDamage) {
-      return leftDamage - rightDamage;
-    }
-    const leftTalents = Number(left.talentPointsTotal ?? left.talentsCount ?? Number.POSITIVE_INFINITY);
-    const rightTalents = Number(right.talentPointsTotal ?? right.talentsCount ?? Number.POSITIVE_INFINITY);
-    if (leftTalents !== rightTalents) {
-      return leftTalents - rightTalents;
-    }
-    return Number(left.userId) - Number(right.userId);
-  });
-
   return {
     evaluated,
-    targets: max === null ? targets : targets.slice(0, max),
+    targets,
     skippedPassed,
     skippedUnknownCriteria,
     failedTotal: targets.length,
-    skippedOverflow: max === null ? 0 : Math.max(0, targets.length - max),
+    skippedOverflow: 0,
   };
 }
 
@@ -9820,9 +9877,9 @@ async function attachTalentPointsTotals(client, candidates, batch, criteria = nu
     const evaluation = evaluateFriendCriteria(candidate, criteria);
     return evaluation.failed.length === 0 && evaluation.unknown.some((check) => ["talents", "talentPointsTotal"].includes(check.key));
   });
-  // Only read personal files still needed for a decision. Stop once the cleanup
-  // limit is satisfied; the remaining friends will be checked on the next run.
-  for (let offset = 0; offset < pending.length && (max === null || failed < max); offset += 4) {
+  // Only read personal files still needed for a decision. Callers that supply
+  // a limit can defer the remaining files to a later batch.
+  for (let offset = 0; offset < pending.length && (max === null || failed < max) && !batch.isCancelled?.(); offset += 4) {
     await Promise.all(pending.slice(offset, offset + 4).map(async (candidate) => {
       const response = await client.friends.achievementSummary(candidate.userId).catch(() => null);
       const total = isSuccessfulGameResponse(response) ? extractTalentPointsTotal(response.data) : null;
@@ -9866,6 +9923,57 @@ function normalizeFriendCleanupCriteria(options = {}) {
   };
 }
 
+async function planFriendCleanup(client, candidates, criteria, max, batch, previous = {}) {
+  // The game returns high authority first. Reverse before sorting so equal
+  // authority values retain the order closest to the end of its list.
+  const ordered = [...candidates].reverse().sort((left, right) =>
+    (left.authority ?? Number.POSITIVE_INFINITY) - (right.authority ?? Number.POSITIVE_INFINITY));
+  const needsTalentSummary = (candidate) => {
+    if (!criteria.needsTalentAchievement) return false;
+    const evaluation = evaluateFriendCriteria(candidate, criteria);
+    return evaluation.failed.length === 0
+      && evaluation.unknown.some((check) => check.key === "talentPointsTotal");
+  };
+  const scanned = [];
+  let confirmedFailures = 0;
+  let loaded = 0;
+  let unavailable = 0;
+
+  for (let offset = 0; offset < ordered.length && (max === null || confirmedFailures < max) && !batch.isCancelled?.();) {
+    const size = max === null ? 4 : Math.min(4, max - confirmedFailures);
+    const chunk = ordered.slice(offset, offset + size).map((candidate) => ({ ...candidate }));
+    const pending = chunk.filter(needsTalentSummary);
+    await Promise.all(pending.map(async (candidate) => {
+      const response = await client.friends.achievementSummary(candidate.userId).catch(() => null);
+      const total = isSuccessfulGameResponse(response) ? extractTalentPointsTotal(response.data) : null;
+      candidate.talentPointsTotal = total;
+      if (total === null) unavailable += 1;
+      loaded += 1;
+    }));
+    if (pending.length > 0) {
+      batch.update({
+        stage: "Checking talent totals",
+        talentTotalsLoaded: (previous.loaded || 0) + loaded,
+        talentTotalsTotal: null,
+        talentTotalsUnavailable: (previous.unavailable || 0) + unavailable,
+      });
+    }
+    scanned.push(...chunk);
+    confirmedFailures += chunk.filter((candidate) =>
+      evaluateFriendCriteria(candidate, criteria).failed.length > 0).length;
+    offset += chunk.length;
+  }
+
+  return {
+    selection: selectFriendCleanupTargets(scanned, criteria, max),
+    scannedTotal: scanned.length,
+    scanComplete: scanned.length === ordered.length,
+    talentTotalsLoaded: loaded,
+    talentTotalsUnavailable: unavailable,
+    talentTotalsUnchecked: null,
+  };
+}
+
 async function cleanupFriends(options = {}, sessionPath) {
   return runFriendsBatchSerialized("cleanup", async (batch) => withContext(sessionPath, async ({ client, selfUserId }) => {
     const criteria = normalizeFriendCleanupCriteria(options);
@@ -9873,37 +9981,61 @@ async function cleanupFriends(options = {}, sessionPath) {
     const max = asPositiveInt(options.max, null);
     const delayMs = asNonNegativeInt(options.delayMs ?? options["delay-ms"], 300) ?? 300;
     const dryRun = criteria.dryRun;
+    const removeDelayMs = dryRun ? 0 : Math.max(delayMs, FRIEND_CLEANUP_MIN_REMOVE_DELAY_MS);
 
-    batch.update({
-      stage: "Loading friends profiles",
-    });
+    batch.update({ stage: "Finding last friends page" });
     // /friendship/profiles is the source used by the game's Friends screen.
     // Unlike /friendship/list, its response shape has remained usable for
     // actions and it cannot leave cleanup with an incomplete target set.
-    const profileMap = await loadFriendMaintenanceProfiles(client, null, selfUserId, batch);
-    let candidates = [...profileMap.values()];
-    const friendIdSet = new Set(candidates.map((item) => item.userId));
-    if (criteria.needsWeeklyDamage) {
+    const pager = await openFriendCleanupProfilePages(client, batch);
+    batch.update({ profileLastPage: pager.lastPage >= 0 ? pager.lastPage : null });
+    let weeklyDamageByUserId = null;
+    if (criteria.needsWeeklyDamage && !batch.isCancelled?.()) {
       batch.update({ stage: "Loading weekly damage" });
-      const weeklyDamageByUserId = await loadWeeklyDamageMap(client, criteria.weeklyTopLimit);
-      candidates = attachWeeklyDamage(candidates, weeklyDamageByUserId);
+      weeklyDamageByUserId = await loadWeeklyDamageMap(client, criteria.weeklyTopLimit);
     }
-    let talentAchievementInfo = null;
-    if (criteria.needsTalentAchievement) {
-      talentAchievementInfo = await attachTalentPointsTotals(client, candidates, batch, criteria, max);
-      candidates = talentAchievementInfo.candidates;
+    const seen = new Set();
+    const targets = [];
+    let evaluatedTotal = 0;
+    let skippedPassed = 0;
+    let skippedUnknownCriteria = 0;
+    let talentTotalsLoaded = 0;
+    let talentTotalsUnavailable = 0;
+    let page = pager.lastPage;
+    for (; page >= 0 && !batch.isCancelled?.() && (max === null || targets.length < max); page -= 1) {
+      batch.update({ stage: "Checking friends from last page", profileScanPage: page });
+      const pageItems = await pager.readPage(page);
+      if (batch.isCancelled?.()) break;
+      let candidates = pageItems.map((item) => normalizeFriendCandidateRecord(item)).filter((candidate) => {
+        if (!candidate.userId || candidate.userId === String(selfUserId) || seen.has(candidate.userId)) return false;
+        seen.add(candidate.userId);
+        return true;
+      });
+      if (weeklyDamageByUserId) candidates = attachWeeklyDamage(candidates, weeklyDamageByUserId);
+      const plan = await planFriendCleanup(client, candidates, criteria,
+        max === null ? null : max - targets.length, batch,
+        { loaded: talentTotalsLoaded, unavailable: talentTotalsUnavailable });
+      targets.push(...plan.selection.targets);
+      evaluatedTotal += plan.scannedTotal;
+      skippedPassed += plan.selection.skippedPassed;
+      skippedUnknownCriteria += plan.selection.skippedUnknownCriteria;
+      talentTotalsLoaded += plan.talentTotalsLoaded;
+      talentTotalsUnavailable += plan.talentTotalsUnavailable;
+      batch.update({
+        authorityProfilesTotal: evaluatedTotal,
+        stage: "Checking friends from last page",
+      });
+      if (!plan.scanComplete) break;
     }
-
-    const selection = selectFriendCleanupTargets(candidates, criteria, max);
-    const targets = selection.targets;
+    const scanComplete = page < 0 && !batch.isCancelled?.();
 
     batch.setPlan(targets.length, {
       stage: dryRun ? "Previewing friend cleanup" : "Cleaning friends",
-      friendsTotal: friendIdSet.size,
-      authorityProfilesTotal: candidates.length,
+      authorityProfilesTotal: evaluatedTotal,
+      profileScanPage: null,
     });
 
-    const results = await runFriendTargetBatch(targets, { delayMs }, async (target) => {
+    const results = await runFriendTargetBatch(targets, { delayMs: removeDelayMs, batch }, async (target) => {
       const userId = String(target.userId);
       const criteriaRecord = buildFriendCriteriaRecord(target, target.evaluation);
       let row;
@@ -9933,19 +10065,20 @@ async function cleanupFriends(options = {}, sessionPath) {
     return {
       selfUserId,
       notAttemptedTotal: targets.length - results.length,
-      friendsTotal: friendIdSet.size,
-      requestedTotal: candidates.length,
-      failedCriteriaTotal: selection.failedTotal,
+      requestedTotal: pager.profileRowsTotal,
+      evaluatedTotal,
+      scanComplete,
+      failedCriteriaTotal: targets.length,
       selectedTotal: targets.length,
-      skippedPassed: selection.skippedPassed,
-      skippedUnknownCriteria: selection.skippedUnknownCriteria,
-      skippedOverflow: selection.skippedOverflow,
-      talentTotalsUnavailable: talentAchievementInfo ? talentAchievementInfo.unavailable : 0,
-      talentTotalsLoaded: talentAchievementInfo ? talentAchievementInfo.loaded : 0,
-      talentTotalsUnchecked: talentAchievementInfo ? talentAchievementInfo.unchecked : 0,
-      okCount: dryRun ? targets.length : results.filter((item) => item.ok).length,
+      skippedPassed,
+      skippedUnknownCriteria,
+      skippedOverflow: 0,
+      talentTotalsUnavailable,
+      talentTotalsLoaded,
+      talentTotalsUnchecked: null,
+      okCount: dryRun ? results.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
-      delayMs,
+      delayMs: removeDelayMs,
       dryRun,
       criteria: serializeFriendCriteria(criteria),
       results,
@@ -9954,10 +10087,11 @@ async function cleanupFriends(options = {}, sessionPath) {
   }));
 }
 
-async function runFriendTargetBatch(targets, { delayMs = 0, continueOnError = true, onChunk = async () => {} }, operation) {
+async function runFriendTargetBatch(targets, { delayMs = 0, continueOnError = true, onChunk = async () => {}, batch = null }, operation) {
   const results = [];
   const concurrency = delayMs > 0 || !continueOnError ? 1 : 3;
   for (let offset = 0; offset < targets.length; offset += concurrency) {
+    if (batch?.isCancelled?.()) break;
     const settled = await Promise.allSettled(targets.slice(offset, offset + concurrency).map(operation));
     for (const item of settled) {
       if (item.status === "fulfilled") results.push(item.value);
@@ -9968,7 +10102,10 @@ async function runFriendTargetBatch(targets, { delayMs = 0, continueOnError = tr
     // POSTs are never replayed automatically. Stop scheduling after throttling
     // or auth failure; all already dispatched requests have settled here.
     if (results.some((row) => [401, 403, 429].includes(row.status)) || (!continueOnError && results.some((row) => row.ok === false))) break;
-    if (delayMs > 0 && offset + concurrency < targets.length) await sleep(delayMs);
+    if (delayMs > 0 && offset + concurrency < targets.length) {
+      if (batch?.wait) await batch.wait(delayMs);
+      else await sleep(delayMs);
+    }
   }
   return results;
 }
@@ -10029,6 +10166,7 @@ async function runFriendsAction(options = {}, sessionPath) {
     const results = await runFriendTargetBatch(targets, {
       delayMs,
       continueOnError,
+      batch,
       onChunk: async () => {
         if (progressChanged) {
           await saveInteractionProgress(progress, selfUserId);
@@ -10082,7 +10220,7 @@ async function runFriendsAction(options = {}, sessionPath) {
       selection,
       selectedTotal: targets.length,
       notAttemptedTotal: targets.length - results.length,
-      okCount: dryRun ? targets.length : results.filter((item) => item.ok).length,
+      okCount: dryRun ? results.length : results.filter((item) => item.ok).length,
       failCount: dryRun ? 0 : results.filter((item) => !item.ok).length,
       dryRun,
       continueOnError,
@@ -18647,6 +18785,7 @@ async function getTalentCalculator(options = {}, sessionPath) {
 module.exports = {
   INTERACTION_TYPES,
   acceptFriendRequests,
+  cancelFriendsBatch,
   buyBossKey,
   buyBossWeapon,
   buyMissingMasterItems,
@@ -18776,6 +18915,7 @@ module.exports = {
     extractTalentPointsTotal,
     normalizeIncomingFriendRequestRecords,
     normalizeFriendProfileRecords,
+    planFriendCleanup,
     selectFriendCleanupTargets,
     loadLowestAuthorityTargets,
     performMonthlyInteraction,
@@ -18814,9 +18954,10 @@ module.exports = {
     selectFriendInteractionTargets,
     selectDamageInteractionTargets,
     runFriendTargetBatch,
+    runFriendsBatchSerialized,
     attachTalentPointsTotals,
     loadIncomingFriendRequestCandidates,
-    loadFriendMaintenanceProfiles,
+    openFriendCleanupProfilePages,
     summarizeBossCheckSession,
     buildBossMeleeCooldowns,
     parseBossTimestampMs,

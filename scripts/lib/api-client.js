@@ -363,6 +363,11 @@ async function createApiClient(options = {}) {
 
         if (!response.ok) {
           lastError = new Error(`Refresh failed: HTTP ${response.status}`);
+          // A rejected token and a rate limit cannot be fixed by changing the
+          // request body. Retrying immediately only multiplies failed calls.
+          if (response.status === 429 || getGameResponseMessage(payload).toLowerCase() === "invalid_token") {
+            throw lastError;
+          }
           continue;
         }
 

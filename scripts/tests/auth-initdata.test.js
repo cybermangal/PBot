@@ -96,6 +96,63 @@ test("an active token without stored InitData is an active session", async () =>
   }
 });
 
+test("expired access token is refreshed before the session is reported active", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-refresh-status-"));
+  const sessionPath = path.join(directory, "session.json");
+  const originalFetch = global.fetch;
+  const nextAccessToken = makeToken(303);
+
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({
+      frameUrl: "https://game.example/game",
+      game: { accessToken: makeToken(303, "access", 1), refreshToken: makeToken(303, "refresh") },
+    }), "utf8");
+    global.fetch = async () => new Response(JSON.stringify({
+      success: true,
+      data: { accessToken: nextAccessToken },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+
+    const status = await getAuthStatus({}, sessionPath);
+    assert.equal(status.auth.isActive, true);
+    assert.equal(status.reason, "session-ready");
+    const saved = JSON.parse(await fs.readFile(sessionPath, "utf8"));
+    assert.equal(saved.game.accessToken, nextAccessToken);
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejected refresh token requires login without repeated refresh requests", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-refresh-rejected-"));
+  const sessionPath = path.join(directory, "session.json");
+  const originalFetch = global.fetch;
+  let calls = 0;
+
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({
+      frameUrl: "https://game.example/game",
+      game: { accessToken: makeToken(303, "access", 1), refreshToken: makeToken(303, "refresh") },
+    }), "utf8");
+    global.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ success: false, message: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const status = await getAuthStatus({}, sessionPath);
+    assert.equal(status.auth.isActive, false);
+    assert.equal(status.auth.requiresLogin, true);
+    assert.equal(status.reason, "refresh-failed");
+    assert.equal(calls, 1);
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("token login validates credentials, binds the user ID, and removes another account's InitData", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-token-login-"));
   const sessionPath = path.join(directory, "session.json");

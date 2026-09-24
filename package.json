@@ -1,6 +1,6 @@
 {
   "name": "pbot",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Local InitData-based tooling for the Tyuryaga mini app",
   "private": true,
   "main": "index.js",

@@ -4,7 +4,7 @@
 
 <p align="center">
   <strong>Локальный бот для игры «Тюряга»</strong><br>
-  Версия 1.2.0 · Windows
+  Версия 1.3.0 · Windows
 </p>
 
 <p align="center">

@@ -576,6 +576,10 @@ const FRIENDS_BATCH_STAGE_LABELS = Object.freeze({
   Completed: "Операция завершена",
   Failed: "Операция завершилась с ошибкой",
   "Loading friends profiles": "Загрузка профилей друзей",
+  "Finding last friends page": "Поиск последней страницы друзей",
+  "Checking friends from last page": "Проверка друзей с конца списка",
+  Cancelling: "Остановка операции",
+  Cancelled: "Операция отменена",
   "Collecting IDs from selected sources": "Сбор игроков из выбранных источников",
   "Previewing friend invites": "Проверка приглашений",
   "Sending friend invites": "Отправка приглашений",
@@ -594,6 +598,8 @@ const FRIENDS_BATCH_STAGE_LABELS = Object.freeze({
 });
 const FRIENDS_BATCH_STATUS_LABELS = Object.freeze({
   running: "Выполняется",
+  cancelling: "Отменяется",
+  cancelled: "Отменено",
   completed: "Готово",
   failed: "Ошибка",
 });
@@ -4929,6 +4935,8 @@ function getAuthReasonLabel(reason) {
       return "токены авторизации истекли";
     case "access-token-expired-refresh-available":
       return "токен доступа истёк, но доступно обновление";
+    case "refresh-failed":
+      return "не удалось обновить сессию — войдите заново";
     case "session-ready":
       return "сессия активна";
     default:
@@ -6401,6 +6409,7 @@ function renderFriendsBatchProgress(payload) {
     <div class="friends-batch-head">
       <strong>${escapeHtml(kindLabel)}</strong>
       ${buildBadge(statusLabel, progress.status === "failed" ? "danger" : progress.status === "completed" ? "success" : "neutral")}
+      ${progress.status === "running" ? `<button class="text-button text-button-danger" type="button" data-friends-batch-cancel="${progress.id}">Отменить</button>` : ""}
     </div>
     <p>${escapeHtml(stageLabel)}${progress.currentTarget ? ` · цель #${escapeHtml(progress.currentTarget)}` : ""}</p>
     <div class="friends-batch-track${isIndeterminate ? " is-indeterminate" : ""}" role="progressbar" aria-label="Прогресс массовой операции" aria-valuemin="0" aria-valuemax="100"${isIndeterminate ? "" : ` aria-valuenow="${ratio}"`}><span style="width:${isIndeterminate ? 36 : ratio}%"></span></div>
@@ -6410,9 +6419,11 @@ function renderFriendsBatchProgress(payload) {
       <span>Скорость: ${rateLabel}</span>
       <span>Осталось: ${formatBatchDuration(progress.estimatedRemainingMs)}</span>
       ${progress.friendsTotal !== null && progress.friendsTotal !== undefined ? `<span>Друзей: ${formatNumber(progress.friendsTotal)}</span>` : ""}
-      ${progress.profilePagesLoaded ? `<span>Страницы профилей: ${profileProgress}</span>` : ""}
+      ${progress.profilePagesLoaded ? `<span>Запросов страниц: ${profileProgress}</span>` : ""}
+      ${progress.profileScanPage !== null && progress.profileScanPage !== undefined && progress.profileLastPage !== null && progress.profileLastPage !== undefined ? `<span>Проверяется страница ${formatNumber(progress.profileScanPage + 1)} из ${formatNumber(progress.profileLastPage + 1)}, с конца</span>` : ""}
       ${progress.incomingRequestsLoaded !== null && progress.incomingRequestsLoaded !== undefined ? `<span>Заявок найдено: ${formatNumber(progress.incomingRequestsLoaded)}</span>` : ""}
       ${progress.talentTotalsTotal !== null && progress.talentTotalsTotal !== undefined ? `<span>Таланты проверены: ${formatNumber(progress.talentTotalsLoaded || 0)} из ${formatNumber(progress.talentTotalsTotal)}</span>` : ""}
+      ${(progress.talentTotalsTotal === null || progress.talentTotalsTotal === undefined) && progress.talentTotalsLoaded ? `<span>Личных дел проверено: ${formatNumber(progress.talentTotalsLoaded)}</span>` : ""}
     </div>
     ${progress.error ? `<p class="friends-batch-error">${escapeHtml(translateUiText(progress.error))}</p>` : ""}
   `;
@@ -6423,7 +6434,9 @@ function renderFriendsBatchProgress(payload) {
 
 function renderFriendsResult(payload) {
   state.friendsResult = payload;
-  if (payload.notAttemptedTotal) appendLog("Friends", `Операция остановлена: осталось целей ${formatNumber(payload.notAttemptedTotal)}. Проверьте ошибки сервера перед повторным запуском.`);
+  if (payload.cancelled) appendLog("Friends", `Операция отменена. Не отправлено действий: ${formatNumber(payload.notAttemptedTotal || 0)}.`);
+  else if (payload.stoppedStatus === 429) appendLog("Friends", `Игра ограничила частоту запросов (HTTP 429). Успешные действия сохранены; не отправлено ${formatNumber(payload.notAttemptedTotal || 0)}. Подождите перед повторным запуском.`);
+  else if (payload.notAttemptedTotal) appendLog("Friends", `Операция остановлена: осталось целей ${formatNumber(payload.notAttemptedTotal)}. Проверьте ошибки сервера перед повторным запуском.`);
   if (payload.friendsTotal !== undefined) {
     state.friendsSummary = {
       ...(state.friendsSummary || {}),
@@ -16790,6 +16803,21 @@ async function refreshFriendsBatchProgress() {
   }
 }
 
+async function handleFriendsBatchProgressClick(event) {
+  const button = event.target.closest("[data-friends-batch-cancel]");
+  if (!button || button.disabled) return;
+  const id = Number(button.dataset.friendsBatchCancel);
+  if (!Number.isInteger(id)) return;
+  document.querySelectorAll(`[data-friends-batch-cancel="${id}"]`).forEach((item) => { item.disabled = true; });
+  try {
+    await apiRequest("POST", "/api/friends/batch-cancel", { id });
+    await refreshFriendsBatchProgress();
+  } catch (error) {
+    appendDiagnosticError("friends", error);
+    await refreshFriendsBatchProgress();
+  }
+}
+
 function startFriendsBatchProgressPolling() {
   if (state.friendsBatchPollTimerId) {
     clearInterval(state.friendsBatchPollTimerId);
@@ -16853,7 +16881,7 @@ async function handleFriendsAccept({ dryRun = false } = {}) {
   try {
     const payload = await runWithFriendsBatchProgress(() => apiRequest("POST", "/api/friends/accept-requests", options));
     renderFriendsResult(payload);
-    if (!options.dryRun) await refreshFriendsSummary({ silent: true });
+    if (!options.dryRun && !payload.cancelled && payload.stoppedStatus !== 429) await refreshFriendsSummary({ silent: true });
     const overflow = payload.skippedEligibleOverflow
       ? ` · ждут следующей пачки ${formatNumber(payload.skippedEligibleOverflow)}`
       : "";
@@ -16861,7 +16889,7 @@ async function handleFriendsAccept({ dryRun = false } = {}) {
       "Friend requests",
       `${options.dryRun ? "Проверка: " : ""}${formatNumber(payload.acceptedCount || 0)} ${options.dryRun ? "к принятию" : "принято"} · ${formatNumber(payload.declinedCount || 0)} ${options.dryRun ? "к отклонению" : "отклонено"} · неизвестные данные ${formatNumber(payload.skippedUnknownCriteria || 0)} · ${formatNumber(payload.failCount || 0)} ошибок${overflow}`,
     );
-    setServerStatus("ready", "ok");
+    setServerStatus(payload.stoppedStatus ? "friend requests stopped" : "ready", payload.stoppedStatus ? "error" : "ok");
     return payload;
   } catch (error) {
     setServerStatus("requests error", "error");
@@ -16888,14 +16916,14 @@ async function handleFriendsCleanup({ dryRun = false } = {}) {
   try {
     const payload = await runWithFriendsBatchProgress(() => apiRequest("POST", "/api/friends/cleanup", options));
     renderFriendsResult(payload);
-    await refreshFriendsSummary({ silent: true });
+    if (!options.dryRun && !payload.cancelled && payload.stoppedStatus !== 429) await refreshFriendsSummary({ silent: true });
     const skipped = [
       payload.skippedPassed ? `прошли условия ${formatNumber(payload.skippedPassed)}` : "",
       payload.skippedUnknownCriteria ? `неизвестные данные ${formatNumber(payload.skippedUnknownCriteria)}` : "",
       payload.skippedOverflow ? `сверх лимита ${formatNumber(payload.skippedOverflow)}` : "",
     ].filter(Boolean).join(", ");
-    appendLog("Friends cleanup", `${payload.okCount} ${options.dryRun ? "к удалению (проверка)" : "удалено"} / ${payload.failCount} с ошибкой · личных дел проверено ${formatNumber(payload.talentTotalsLoaded || 0)}${payload.talentTotalsUnchecked ? ` · отложено до следующей пачки ${formatNumber(payload.talentTotalsUnchecked)}` : ""}${skipped ? ` · пропущено ${skipped}` : ""}`);
-    setServerStatus("ready", "ok");
+    appendLog("Friends cleanup", `${payload.okCount} ${options.dryRun ? "к удалению (проверка)" : "удалено"} / ${payload.failCount} с ошибкой · профилей проверено ${formatNumber(payload.evaluatedTotal || 0)} из ${formatNumber(payload.requestedTotal || 0)}${!payload.scanComplete && !payload.cancelled && payload.selectedTotal >= options.max ? " · остальные не проверялись" : ""} · личных дел проверено ${formatNumber(payload.talentTotalsLoaded || 0)}${skipped ? ` · пропущено ${skipped}` : ""}`);
+    setServerStatus(payload.stoppedStatus ? "cleanup stopped" : "ready", payload.stoppedStatus ? "error" : "ok");
     return payload;
   } catch (error) {
     setServerStatus("cleanup error", "error");
@@ -21845,6 +21873,9 @@ async function bootstrap() {
   $("#friends-accept-preview-btn").addEventListener("click", () => handleFriendsAccept({ dryRun: true }));
   $("#friends-summary-refresh-btn").addEventListener("click", () => refreshFriendsSummary());
   $("#friends-action-btn").addEventListener("click", handleFriendsAction);
+  document.querySelectorAll("[data-friends-batch-progress]").forEach((target) => {
+    target.addEventListener("click", handleFriendsBatchProgressClick);
+  });
   $("#friends-action-type").addEventListener("change", updateFriendsActionNote);
   $("#friends-damage-refresh-btn").addEventListener("click", () => handleFriendsDamageRefresh());
   $("#friends-damage-scope").addEventListener("click", handleFriendsDamageScopeClick);

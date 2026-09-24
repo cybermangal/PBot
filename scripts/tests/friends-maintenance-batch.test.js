@@ -2,7 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const { __test: service } = require("../lib/ui-service");
+const uiService = require("../lib/ui-service");
+const { __test: service } = uiService;
 const maintenance = require("../lib/friends-maintenance");
 const batch = { update() {}, setPlan() {}, completeTarget() {} };
 const pause = () => new Promise((resolve) => setImmediate(resolve));
@@ -26,6 +27,7 @@ function operation(name, client) {
     saveInteractionProgress: async () => {},
     isInteractionResponseSuccessful: (r) => r.ok && r.data?.success !== false,
     isSuccessfulGameResponse: (r) => r?.ok && r.data?.success !== false,
+    FRIEND_CLEANUP_MIN_REMOVE_DELAY_MS: 600,
     isAlreadyPerformedInteractionResponse: () => false,
     markCompletedInteraction: (progress, type, id) => { progress.completedByType[type].push(id); return true; },
   };
@@ -64,7 +66,7 @@ test("damage selection deduplicates, skips self and completed daily targets and 
   assert.equal(service.selectDamageInteractionTargets(rows, {}, "1", "Fight", progress).targets.length, 2);
 });
 
-test("4500-friend cleanup stops personal-file reads at the removal limit with at most four in flight", async () => {
+test("personal-file helper stops at its limit with at most four reads in flight", async () => {
   let active = 0, peak = 0, reads = 0;
   const candidates = Array.from({ length: 4500 }, (_, i) => ({ userId: String(i + 1) }));
   const client = { friends: { achievementSummary: async () => {
@@ -158,5 +160,138 @@ test("cleanup and incoming dry runs use real plans without any mutations", async
   const cleanup = await operation("cleanupFriends", client)({ minTalents: 50, max: 50, dryRun: true });
   const incoming = await operation("acceptFriendRequests", client)({ minTalents: 50, max: 50, dryRun: true });
   assert.equal(cleanup.selectedTotal, 1);
+  assert.equal(cleanup.delayMs, 0);
   assert.equal(incoming.declinedCount, 1);
+});
+
+test("cleanup removals are paced even when the requested extra delay is zero", async () => {
+  let removals = 0;
+  const client = { friends: {
+    profiles: async (page) => ({ ok: true, data: page === 0 ? [{ userId: "1", authority: 1 }] : [] }),
+    achievementSummary: async () => ({ ok: true, data: { overview: { talentPointsTotal: 10 } } }),
+    remove: async () => { removals += 1; return { ok: true, status: 200, data: { success: true } }; },
+  } };
+  const result = await operation("cleanupFriends", client)({ minTalents: 50, max: 1, delayMs: 0 });
+  assert.equal(result.delayMs, 600);
+  assert.equal(result.okCount, 1);
+  assert.equal(removals, 1);
+});
+
+test("rate-limited batches report HTTP 429 even if it was the final target", async () => {
+  const result = await service.runFriendsBatchSerialized("cleanup", async (progress) => {
+    progress.setPlan(1);
+    progress.completeTarget("1", false);
+    return { notAttemptedTotal: 0, results: [{ userId: "1", ok: false, status: 429 }] };
+  });
+  assert.equal(result.stoppedStatus, 429);
+  assert.equal(uiService.getFriendsBatchProgress().last.status, "failed");
+  assert.match(uiService.getFriendsBatchProgress().last.error, /HTTP 429/);
+});
+
+test("cleanup finds the last page and stops before reading earlier profiles", async () => {
+  const pages = [];
+  const summaries = [];
+  const profiles = Array.from({ length: 2500 }, (_, index) => ({
+    userId: String(index + 1), authority: 2500 - index,
+  }));
+  const client = { friends: {
+    profiles: async (page, { pageSize }) => {
+      pages.push(page);
+      assert.equal(pageSize, 1000);
+      return { ok: true, data: profiles.slice(page * pageSize, (page + 1) * pageSize) };
+    },
+    achievementSummary: async (userId) => {
+      summaries.push(userId);
+      return { ok: true, data: { overview: { talentPointsTotal: 10 } } };
+    },
+    remove: async () => { throw new Error("Dry run must not remove friends"); },
+  } };
+
+  const result = await operation("cleanupFriends", client)({ minTalents: 50, max: 2, dryRun: true });
+  assert.deepEqual(pages, [0, 1, 2, 4, 3]);
+  assert.deepEqual(summaries, ["2500", "2499"]);
+  assert.deepEqual(Array.from(result.targets, (item) => item.userId), ["2500", "2499"]);
+  assert.equal(result.evaluatedTotal, 2);
+  assert.equal(result.scanComplete, false);
+  assert.equal(result.talentTotalsLoaded, 2);
+  assert.equal(result.requestedTotal, 2500);
+});
+
+test("cleanup checks talents in authority order and skips files for damage failures", async () => {
+  const summaries = [];
+  const client = {
+    weekly: { top: async () => ({ ok: true, data: { top: [
+      { userId: "1", damage: 1000 }, { userId: "2", damage: 1000 },
+      { userId: "3", damage: 1000 }, { userId: "4", damage: 1000 },
+      { userId: "5", damage: 10 },
+    ] } }) },
+    friends: {
+      profiles: async (page) => ({ ok: true, data: page === 0
+        ? [1, 2, 3, 4, 5].map((id) => ({ userId: String(id), authority: 600 - id * 100 }))
+        : [] }),
+      achievementSummary: async (userId) => {
+        summaries.push(userId);
+        return { ok: true, data: { overview: { talentPointsTotal: 10 } } };
+      },
+      remove: async () => { throw new Error("Dry run must not remove friends"); },
+    },
+  };
+  const result = await operation("cleanupFriends", client)({
+    minWeeklyDamage: 100, minTalents: 50, max: 2, dryRun: true,
+  });
+  assert.deepEqual(Array.from(result.targets, (item) => item.userId), ["5", "4"]);
+  assert.deepEqual(summaries, ["4"]);
+  assert.equal(result.evaluatedTotal, 2);
+});
+
+test("cancel stops scheduling friend mutations after the current request settles", async () => {
+  let releaseFirst;
+  let signalStarted;
+  const firstStarted = new Promise((resolve) => { signalStarted = resolve; });
+  const firstFinished = new Promise((resolve) => { releaseFirst = resolve; });
+  const calls = [];
+  const running = service.runFriendsBatchSerialized("action", async (progress) => {
+    progress.setPlan(4);
+    const results = await service.runFriendTargetBatch([1, 2, 3, 4], { delayMs: 5, batch: progress }, async (id) => {
+      calls.push(id);
+      if (id === 1) {
+        signalStarted();
+        await firstFinished;
+      }
+      progress.completeTarget(id, true);
+      return { ok: true };
+    });
+    return { notAttemptedTotal: 4 - results.length, results };
+  });
+  await firstStarted;
+  const id = uiService.getFriendsBatchProgress().active.id;
+  assert.equal(uiService.cancelFriendsBatch(id + 1).accepted, false);
+  assert.equal(uiService.cancelFriendsBatch(id).accepted, true);
+  assert.equal(uiService.getFriendsBatchProgress().active.status, "cancelling");
+  releaseFirst();
+  const result = await running;
+  assert.deepEqual(calls, [1]);
+  assert.equal(result.cancelled, true);
+  assert.equal(result.notAttemptedTotal, 3);
+  assert.equal(uiService.getFriendsBatchProgress().last.status, "cancelled");
+});
+
+test("cancel stops a long cleanup preview after the in-flight talent checks", async () => {
+  let cancelled = false;
+  let reads = 0;
+  const client = { friends: { achievementSummary: async () => {
+    reads += 1;
+    if (reads === 4) cancelled = true;
+    return { ok: true, data: { overview: { talentPointsTotal: 10 } } };
+  } } };
+  const batch = { update() {}, isCancelled: () => cancelled };
+  const candidates = Array.from({ length: 1000 }, (_, index) => ({
+    userId: String(index + 1), authority: 1000 - index,
+  }));
+  const criteria = service.normalizeFriendCleanupCriteria({ minTalents: 50 });
+  const plan = await service.planFriendCleanup(client, candidates, criteria, 500, batch);
+  assert.equal(reads, 4);
+  assert.equal(plan.scannedTotal, 4);
+  assert.equal(plan.selection.targets.length, 4);
+  assert.equal(plan.scanComplete, false);
 });
