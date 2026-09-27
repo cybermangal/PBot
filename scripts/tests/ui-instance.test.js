@@ -159,18 +159,20 @@ test("UI opens the tab during the click, handles popup blocking and displays sta
 
 async function reservePair() {
   for (let attempt = 0; attempt < 20; attempt += 1) {
+    // Windows may reserve newly released ephemeral ports for its own use.
+    // Keep the three-process integration test below that range.
+    const port = 20_000 + Math.floor(Math.random() * 10_000);
     const first = net.createServer();
-    await new Promise((resolve) => first.listen(0, "127.0.0.1", resolve));
-    const port = first.address().port;
     const second = net.createServer();
     const third = net.createServer();
     try {
+      await new Promise((resolve, reject) => { first.once("error", reject); first.listen(port, "127.0.0.1", resolve); });
       await new Promise((resolve, reject) => { second.once("error", reject); second.listen(port + 1, "127.0.0.1", resolve); });
       await new Promise((resolve, reject) => { third.once("error", reject); third.listen(port + 2, "127.0.0.1", resolve); });
       return port;
     } catch { /* Try another ephemeral pair. */ }
     finally {
-      await new Promise((resolve) => first.close(resolve));
+      if (first.listening) await new Promise((resolve) => first.close(resolve));
       if (second.listening) await new Promise((resolve) => second.close(resolve));
       if (third.listening) await new Promise((resolve) => third.close(resolve));
     }
@@ -259,6 +261,9 @@ test("three real server processes preserve independent accounts, listing, reuse,
     assert.equal(opened.url, secondBase);
     assert.equal(alsoOpened.url, secondBase);
     assert.equal((await request(`${secondBase}/api/auth/status`)).auth.isActive, false);
+    const blocked = await fetch(`${secondBase}/api/player/init`);
+    assert.equal(blocked.status, 401);
+    assert.equal((await blocked.json()).code, "AUTH_REQUIRED");
     await login(secondBase, 202);
     assert.equal((await request(`${base}/api/auth/status`)).auth.selfUserId, "101");
     assert.equal((await request(`${secondBase}/api/auth/status`)).auth.selfUserId, "202");

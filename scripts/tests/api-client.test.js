@@ -250,6 +250,8 @@ test("concurrent clients share one token refresh and reuse the persisted result"
   global.fetch = async (url, options = {}) => {
     if (String(url).endsWith("/api/auth/refresh")) {
       refreshCount += 1;
+      assert.deepEqual(JSON.parse(options.body), { refresh: "refresh-token" });
+      assert.equal(options.headers.Authorization, undefined);
       await new Promise((resolve) => setTimeout(resolve, 10));
       return new Response(JSON.stringify({
         success: true,
@@ -284,6 +286,125 @@ test("concurrent clients share one token refresh and reuse the persisted result"
     assert.equal(refreshCount, 1);
     const persisted = JSON.parse(await fs.readFile(sessionPath, "utf8"));
     assert.equal(persisted.game.accessToken, "new-token");
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("a late refresh cannot overwrite a newly selected account", async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-api-switch-race-"));
+  const sessionPath = path.join(tempDir, "session.json");
+  let releaseRefresh;
+  let refreshStarted;
+  const started = new Promise((resolve) => { refreshStarted = resolve; });
+  const released = new Promise((resolve) => { releaseRefresh = resolve; });
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({ game: { accessToken: "old-token", refreshToken: "old-refresh" } }));
+    global.fetch = async () => {
+      refreshStarted();
+      await released;
+      return new Response(JSON.stringify({ success: true, accessToken: "late-token", refreshToken: "late-refresh" }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    const client = await createApiClient({ sessionPath, minRequestIntervalMs: 0 });
+    const pending = client.refreshAuth();
+    await started;
+    await fs.writeFile(sessionPath, JSON.stringify({ game: { accessToken: "new-account-token", refreshToken: "new-account-refresh" } }));
+    releaseRefresh();
+    await assert.rejects(pending, { code: "AUTH_SESSION_CHANGED" });
+    assert.equal(JSON.parse(await fs.readFile(sessionPath, "utf8")).game.accessToken, "new-account-token");
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("rejected refresh recovers through stored InitData once for concurrent requests", async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-api-client-"));
+  const sessionPath = path.join(tempDir, "session.json");
+  await fs.writeFile(sessionPath, JSON.stringify({
+    telegram: { initData: "saved-init-data" },
+    game: { frameUrl: "https://pbot.test/game", accessToken: "old-token", refreshToken: "invalid-refresh" },
+  }));
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const endpoint = new URL(url).pathname;
+    calls.push(endpoint);
+    if (endpoint === "/api/auth/refresh") {
+      return new Response(JSON.stringify({ success: false, message: "invalid_token" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      });
+    }
+    if (endpoint === "/api/auth/login") {
+      assert.deepEqual(JSON.parse(options.body), { initData: "saved-init-data" });
+      return new Response(JSON.stringify({ success: true, accessToken: "new-token", refreshToken: "new-refresh" }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    }
+    const authorized = options.headers.Authorization === "Bearer new-token";
+    return new Response(JSON.stringify({ success: authorized }), {
+      status: authorized ? 200 : 401, headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const clients = await Promise.all([1, 2].map(() => createApiClient({ sessionPath, minRequestIntervalMs: 0 })));
+    const responses = await Promise.all(clients.map((client) => client.get("/api/test")));
+    assert.ok(responses.every((response) => response.ok));
+    assert.equal(calls.filter((endpoint) => endpoint === "/api/auth/refresh").length, 1);
+    assert.equal(calls.filter((endpoint) => endpoint === "/api/auth/login").length, 1);
+    const persisted = JSON.parse(await fs.readFile(sessionPath, "utf8"));
+    assert.equal(persisted.game.accessToken, "new-token");
+    assert.equal(persisted.game.refreshToken, "new-refresh");
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("failed stored login pauses requests until credentials change", async () => {
+  const originalFetch = global.fetch;
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-api-client-"));
+  const sessionPath = path.join(tempDir, "session.json");
+  await fs.writeFile(sessionPath, JSON.stringify({
+    telegram: { initData: "expired-init-data" },
+    game: { frameUrl: "https://pbot.test/game", accessToken: "old-token", refreshToken: "invalid-refresh" },
+  }));
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const endpoint = new URL(url).pathname;
+    calls.push(endpoint);
+    if (endpoint === "/api/auth/refresh") {
+      return new Response(JSON.stringify({ success: false, message: "invalid_token" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      });
+    }
+    if (endpoint === "/api/auth/login") {
+      return new Response(JSON.stringify({ success: false, message: "invalid initData" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ success: options.headers.Authorization === "Bearer external-token" }), {
+      status: options.headers.Authorization === "Bearer external-token" ? 200 : 401,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const client = await createApiClient({ sessionPath, minRequestIntervalMs: 0 });
+    await assert.rejects(client.get("/api/test"), /invalid initData/i);
+    const attemptsAfterFailure = calls.length;
+    await assert.rejects(client.get("/api/test"), /invalid initData/i);
+    assert.equal(calls.length, attemptsAfterFailure);
+    const session = JSON.parse(await fs.readFile(sessionPath, "utf8"));
+    session.game.accessToken = "external-token";
+    await fs.writeFile(sessionPath, JSON.stringify(session));
+    const freshClient = await createApiClient({ sessionPath, minRequestIntervalMs: 0 });
+    assert.equal((await freshClient.get("/api/test")).ok, true);
+    const recovered = await client.get("/api/test");
+    assert.equal(recovered.ok, true);
   } finally {
     global.fetch = originalFetch;
     await fs.rm(tempDir, { recursive: true, force: true });

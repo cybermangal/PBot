@@ -414,41 +414,80 @@
             </section>
 
             <section class="card control-card boss-queue-card full-span">
-              <div class="card-head">
-                <div>
-                  <p class="card-kicker">ПЛАН БОЁВ</p>
-                  <h2>Очередь боёв</h2>
-                  <p class="card-subtitle">Соберите очередь по правилам или добавьте босса вручную.</p>
-                </div>
+              <div class="card-head"><div><p class="card-kicker">ПЛАН БОЁВ</p><h2>Очередь боёв</h2><p class="card-subtitle">Порядок боёв, доступность запуска и настройки каждого босса.</p></div></div>
+              <div class="boss-next-fight">
+                <div><p class="card-kicker">СЛЕДУЮЩИЙ БОЙ</p><div id="boss-run-next-preview" aria-live="polite"></div></div>
+                <div class="boss-next-fight-actions"><label class="toggle compact-toggle"><input id="boss-auto-start-next" type="checkbox" checked><span>Автостарт следующего босса</span></label><button id="boss-run-next-btn" class="action-button action-button-alt" type="button">▶ Запустить следующего</button></div>
               </div>
-
-              <div class="boss-queue-workflow">
-                <div class="boss-queue-compose">
-                  <div class="boss-queue-plan-controls">
+              <section id="boss-manual-composer" class="boss-manual-composer" aria-labelledby="boss-manual-title">
+                <div class="boss-manual-head"><h3 id="boss-manual-title">Добавить босса</h3><span>В конец текущей очереди</span></div>
+                <div class="boss-manual-fields"><div class="field-grid boss-picker-grid">
                     <label class="field field-wide">
-                      <span>Источник очереди</span>
-                      <div class="boss-queue-source-row">
-                        <select id="boss-run-source-select">
-                          <option value="auto">По правилам автоформирования</option>
-                        </select>
-                        <button id="boss-run-source-apply" class="action-button action-button-mini" type="button">Сформировать очередь</button>
+                      <span>Фильтр каталога</span>
+                      <select id="boss-category">
+                        <option value="startable">Доступные для запуска</option>
+                        <option value="combo">Только с комбо</option>
+                        <option value="">Все боссы</option>
+                        <option value="1">Беспредельщики</option>
+                        <option value="2">Надзиратели</option>
+                        <option value="3">Рецидивисты</option>
+                      </select>
+                    </label>
+                    <label class="field field-wide">
+                      <span>Босс</span>
+                      <select id="boss-select" aria-label="Босс для добавления"></select>
+                    </label>
+                  </div>
+                  <div class="field-grid boss-mode-grid">
+                    <label class="field">
+                      <span>Режим</span>
+                      <div class="boss-mode-control">
+                        <select id="boss-mode"></select>
+                        <span id="boss-mode-collection" class="boss-collection-counter" hidden></span>
                       </div>
                     </label>
-                    <details class="inline-settings boss-queue-preset-management">
-                      <summary>Управление пресетами</summary>
-                      <div class="inline-settings-body boss-queue-preset-row">
-                        <select id="boss-run-preset-select"></select>
-                        <input id="boss-run-preset-name" type="text" maxlength="80" placeholder="Название нового пресета">
-                        <button id="boss-run-preset-save" class="action-button action-button-mini action-button-alt" type="button">Сохранить текущую очередь</button>
-                        <button id="boss-run-preset-delete" class="text-button text-button-danger" type="button">Удалить выбранный пресет</button>
+                    <label class="field boss-combo-field" hidden>
+                      <span>Комбо</span>
+                      <div class="combo-mode-control boss-combo-collection-control">
+                        <select id="boss-combo-mode"></select>
+                        <span id="boss-combo-mode-collection" class="boss-collection-counter" hidden></span>
+                        <button id="boss-combo-inline-btn" class="action-button action-button-mini action-button-ghost combo-mode-button" type="button" hidden>Комбо</button>
                       </div>
-                    </details>
+                    </label>
                   </div>
 
-                  <details id="boss-queue-settings" class="inline-settings boss-queue-settings">
+                  <div id="boss-manual-preview" class="boss-manual-preview" aria-live="polite"></div>
+                  <div class="boss-manual-options"><label id="boss-auto-kill-solo-field" class="toggle" hidden><input id="boss-auto-kill-solo" type="checkbox" checked><span>Убить автоматически</span></label>
+                  <label class="toggle"><input id="boss-use-combo" type="checkbox" checked><span>Пробивать комбо, если вбито</span></label></div>
+                  <div class="button-row boss-add-actions">
+                    <button id="boss-run-queue-add" class="action-button" type="button">Добавить в очередь</button>
+                    <button id="boss-start-btn" class="action-button action-button-ghost">Запустить сразу</button>
+                    <button id="boss-buy-selected-key-btn" class="action-button action-button-ghost" type="button" hidden>Купить ключ</button>
+                  </div>
+                  <p id="boss-selected-key-note" class="inline-note">Выберите босса, чтобы увидеть доступность ключа.</p></div>
+              </section>
+              <div class="boss-queue-workflow">
+                <div class="boss-queue-list">
+                  <div id="boss-run-queue-summary" class="stats-grid stats-grid-tight"></div>
+                  <p class="boss-queue-reward-legend">Награды: собрано / всего</p>
+                  <div class="boss-queue-table-wrap"><div id="boss-run-queue-body" class="boss-run-queue-list" role="list"></div></div>
+                  <div class="button-row queue-primary-actions">
+                    <button class="action-button action-button-mini action-button-ghost" type="button" data-boss-queue-panel="auto">⚙ Собрать автоматически</button>
+                    <button class="action-button action-button-mini action-button-ghost" type="button" data-boss-queue-panel="presets">▤ Пресеты очереди</button>
+                    <button id="boss-run-queue-clear" class="text-button text-button-danger" type="button">Очистить текущую очередь</button>
+                  </div>
+                  <p id="boss-queue-build-status" class="boss-queue-build-status" role="status" aria-live="polite" hidden></p>
+                  <p id="boss-run-queue-note" class="inline-note"></p>
+                </div>
+              </div>
+              <div class="boss-queue-settings-launch"><div><strong>Участники и правила автоформирования</strong><small id="boss-auto-queue-settings-summary"></small></div><button class="action-button action-button-mini action-button-ghost" type="button" data-boss-queue-panel="auto">Настроить</button></div>
+            </section>
+            <dialog id="boss-queue-auto-dialog" class="boss-queue-editor-dialog" aria-labelledby="boss-queue-auto-title">
+    <div class="boss-queue-editor-head"><div><p class="card-kicker">ОЧЕРЕДЬ БОЁВ</p><h2 id="boss-queue-auto-title">Автоформирование</h2></div><button type="button" class="text-button boss-queue-editor-close" data-boss-queue-close aria-label="Закрыть">×</button></div>
+    <div class="boss-queue-editor-content"><div class="boss-queue-editor-tabs"><button type="button" data-boss-auto-tab="participants" aria-pressed="true">Участники</button><button type="button" data-boss-auto-tab="rules" aria-pressed="false">Правила боя</button></div><details id="boss-queue-settings" class="inline-settings boss-queue-settings">
                     <summary>Участники и правила автоформирования</summary>
                     <div class="inline-settings-body boss-auto-rules">
-                      <div class="field boss-exclude-field">
+                      <div class="field boss-exclude-field" data-boss-auto-panel="participants">
                         <details id="boss-run-queue-exclude-panel" class="boss-exclude-panel">
                           <summary>
                             <span class="boss-exclude-summary-main">Участники очереди</span>
@@ -471,9 +510,14 @@
                             <button class="action-button action-button-mini action-button-ghost js-boss-exclude-action" type="button" data-action="clear">Снять выбор</button>
                           </div>
                           <p id="boss-exclude-template-note" class="inline-note boss-exclude-template-note"></p>
+                          <div class="boss-auto-participant-filters">
+                            <input id="boss-auto-participant-search" type="search" placeholder="Найти босса по имени" aria-label="Найти участника автоформирования">
+                            <select id="boss-auto-participant-category" aria-label="Категория участников"><option value="">Все категории</option><option value="1">Беспредельщики</option><option value="2">Надзиратели</option><option value="3">Рецидивисты</option></select>
+                          </div>
                           <div id="boss-run-queue-exclude-list" class="boss-exclude-list"></div>
                         </details>
                       </div>
+                      <div class="boss-auto-common-rules" data-boss-auto-panel="rules" hidden>
                       <fieldset class="boss-auto-rules-group">
                         <legend>Правила боя</legend>
                         <label class="field boss-auto-rules-combo"><span>Комбо</span><select id="boss-auto-queue-combo-mode"><option value="">Авто · из сохранённых</option><option value="pacansky">Пацанский</option><option value="blotnoy">Блатной</option><option value="avtoritetny">Авторитетный</option><option value="vorovskoy">Воровской</option></select></label>
@@ -483,8 +527,8 @@
                       </fieldset>
                       <fieldset class="boss-auto-rules-group">
                         <legend>Дополнительно</legend>
-                        <label class="toggle" title="Для вещей и наколок предпочтителен недособранный режим боя до 3 млрд HP; иначе — пацанский.">
-                          <input id="boss-run-queue-smart-collection" type="checkbox">
+                        <label class="toggle" title="Для вещей и наколок предпочтителен недособранный режим боя без ограничения HP; иначе — пацанский. Явно выбранный режим имеет приоритет.">
+                          <input id="boss-run-queue-smart-collection" type="checkbox" checked>
                           <span>Подбирать режим по недостающим наградам</span>
                         </label>
                         <label class="toggle" title="При нехватке ключей докупает их перед стартом боя только если ожидаемая награда босса больше цены покупки.">
@@ -496,87 +540,33 @@
                           <input id="boss-delay" type="number" min="0" value="0">
                         </label>
                       </fieldset>
+                      </div>
                     </div>
-                  </details>
-
-                  <details class="inline-settings boss-manual-add">
-                    <summary>Добавить босса вручную</summary>
-                    <div class="inline-settings-body boss-queue-builder">
-
-                  <div class="field-grid boss-picker-grid">
+                  </details></div><div class="boss-queue-editor-footer"><p id="boss-auto-build-status" class="boss-queue-build-status" role="status" aria-live="polite" hidden></p><button id="boss-run-auto-build" type="button" class="action-button">Сформировать и заменить очередь</button></div>
+  </dialog>
+            <dialog id="boss-queue-presets-dialog" class="boss-queue-editor-dialog" aria-labelledby="boss-queue-presets-title">
+    <div class="boss-queue-editor-head"><div><p class="card-kicker">ОЧЕРЕДЬ БОЁВ</p><h2 id="boss-queue-presets-title">Пресеты очереди</h2></div><button type="button" class="text-button boss-queue-editor-close" data-boss-queue-close aria-label="Закрыть">×</button></div>
+    <div class="boss-queue-editor-content"><div class="boss-queue-plan-controls">
                     <label class="field field-wide">
-                      <span>Фильтр каталога</span>
-                      <select id="boss-category">
-                        <option value="startable">Доступные для запуска</option>
-                        <option value="combo">Только с комбо</option>
-                        <option value="">Все боссы</option>
-                        <option value="1">Беспредельщики</option>
-                        <option value="2">Надзиратели</option>
-                        <option value="3">Рецидивисты</option>
-                      </select>
-                    </label>
-                    <label class="field field-wide">
-                      <span>Босс</span>
-                      <select id="boss-select"></select>
-                    </label>
-                  </div>
-                  <div class="field-grid boss-mode-grid">
-                    <label class="field">
-                      <span>Режим</span>
-                      <div class="boss-mode-control">
-                        <select id="boss-mode"></select>
-                        <span id="boss-mode-collection" class="boss-collection-counter" hidden></span>
+                      <span>Источник очереди</span>
+                      <div class="boss-queue-source-row">
+                        <select id="boss-run-source-select">
+                          <option value="auto">По правилам автоформирования</option>
+                        </select>
+                        <button id="boss-run-source-apply" class="action-button action-button-mini" type="button">Сформировать очередь</button>
                       </div>
                     </label>
-                    <label class="field boss-combo-field" hidden>
-                      <span>Комбо</span>
-                      <div class="combo-mode-control boss-combo-collection-control">
-                        <select id="boss-combo-mode"></select>
-                        <span id="boss-combo-mode-collection" class="boss-collection-counter" hidden></span>
-                        <button id="boss-combo-inline-btn" class="action-button action-button-mini action-button-ghost combo-mode-button" type="button" hidden>Комбо</button>
+                    <details class="inline-settings boss-queue-preset-management">
+                      <summary>Управление пресетами</summary>
+                      <div class="inline-settings-body boss-queue-preset-row">
+                        <select id="boss-run-preset-select"></select>
+                        <input id="boss-run-preset-name" type="text" maxlength="80" placeholder="Название нового пресета">
+                        <button id="boss-run-preset-save" class="action-button action-button-mini action-button-alt" type="button">Сохранить текущую очередь</button>
+                        <button id="boss-run-preset-delete" class="text-button text-button-danger" type="button">Удалить выбранный пресет</button>
                       </div>
-                    </label>
-                  </div>
-
-                  <label id="boss-auto-kill-solo-field" class="toggle" hidden><input id="boss-auto-kill-solo" type="checkbox" checked><span>Убить автоматически</span></label>
-                  <label class="toggle"><input id="boss-use-combo" type="checkbox" checked><span>Пробивать комбо, если вбито</span></label>
-                  <div class="button-row boss-add-actions">
-                    <button id="boss-run-queue-add" class="action-button" type="button">Добавить в очередь</button>
-                    <button id="boss-start-btn" class="action-button action-button-ghost">Запустить сразу</button>
-                    <button id="boss-buy-selected-key-btn" class="action-button action-button-ghost" type="button" hidden>Купить ключ</button>
-                  </div>
-                  <p id="boss-selected-key-note" class="inline-note">Выберите босса, чтобы увидеть доступность ключа.</p>
-
-
-                    </div>
-                  </details>
-                </div>
-                <div class="boss-queue-list">
-                  <div class="section-heading">
-                    <div>
-                      <span class="section-kicker">ГОТОВО К ЗАПУСКУ</span>
-                      <h3>Очередь</h3>
-                    </div>
-                    <label class="toggle compact-toggle">
-                      <input id="boss-auto-start-next" type="checkbox" checked>
-                      <span>Автостарт следующего босса</span>
-                    </label>
-                  </div>
-
-
-                  <div id="boss-run-queue-summary" class="stats-grid stats-grid-tight"></div>
-                  <div class="boss-queue-table-wrap">
-                    <div id="boss-run-queue-body" class="boss-run-queue-list" role="list"></div>
-                  </div>
-                  <div class="button-row queue-primary-actions">
-                    <button id="boss-run-next-btn" class="action-button action-button-alt">Запустить следующего</button>
-                    <button id="boss-run-queue-clear" class="text-button text-button-danger" type="button">Очистить текущую очередь</button>
-                  </div>
-                  <p id="boss-run-queue-note" class="inline-note">Автосбор проходит только по выбранным боссам и учитывает комбо и имеющиеся ключи.</p>
-
-                </div>
-              </div>
-            </section>
+                    </details>
+                  </div></div>
+  </dialog>
 
             <section class="card boss-catalog-card full-span collapsible-card is-collapsed">
               <div class="card-head">

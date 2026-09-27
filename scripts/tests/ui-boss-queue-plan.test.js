@@ -1985,7 +1985,7 @@ test("UI auto queue plan applies per-boss mode overrides", () => {
   assert.equal(plan.entries[0].mode, "avtoritetny");
 });
 
-test("UI auto battle mode stays automatic while a pacansky combo is retained", () => {
+test("UI resolves automatic battle mode before queueing while retaining the pacansky combo", () => {
   buildPlanContext.templateKeys.clear();
   buildPlanContext.templateKeys.add("4:pacansky");
 
@@ -2013,7 +2013,7 @@ test("UI auto battle mode stays automatic while a pacansky combo is retained", (
   buildPlanContext.templateKeys.clear();
 
   assert.equal(plan.entries.length, 1);
-  assert.equal(plan.entries[0].mode, null);
+  assert.equal(plan.entries[0].mode, "pacansky");
   assert.equal(plan.entries[0].comboMode, "pacansky");
 });
 
@@ -2090,7 +2090,7 @@ test("UI smart auto queue never selects solo mode for missing collection rewards
   assert.equal(plan.smartPreferredCount, 1);
 });
 
-test("UI smart auto queue keeps eligible bosses and falls back to pacansky above the 3B HP limit", () => {
+test("UI smart auto queue selects missing rewards above 3B HP", () => {
   buildPlanContext.defaultExcludedBossIds.add(3);
   const plan = buildPlanContext.buildBossAutoQueuePlan({
     smartCollectionEnabled: true,
@@ -2126,9 +2126,9 @@ test("UI smart auto queue keeps eligible bosses and falls back to pacansky above
   });
 
   assert.equal(plan.entries.length, 1);
-  assert.equal(plan.entries[0].mode, "pacansky");
+  assert.equal(plan.entries[0].mode, "vorovskoy");
   assert.equal(plan.excludedCount, 1);
-  assert.equal(plan.smartFallbackCount, 1);
+  assert.equal(plan.smartPreferredCount, 1);
   buildPlanContext.defaultExcludedBossIds.clear();
 });
 
@@ -2848,4 +2848,185 @@ test("mass rules replace selected bosses only and permit a later individual exce
   vm.runInNewContext('handleBossRunQueueExcludeChange({ target: { closest() { return trigger; } } });', context);
   assert.equal(context.state.bossQueueSettings.rulesByBossId[2].combo, 'none');
   assert.equal(context.state.bossQueueSettings.rulesByBossId[1].combo, 'blotnoy');
+});
+
+test("explicit battle rules take priority over smart collection and brigade is opt-in", () => {
+  const candidate = {
+    id: 25, title: "Пресс", canStart: true, remainingToday: 1,
+    requiredKeys: 0, keyBypassed: true, baseHp: 70_000_000,
+    selectedMode: "brigade", availableModes: ["brigade", "pacansky", "avtoritetny"],
+  };
+  const rewards = { bosses: [{ id: 25, battleModes: [
+    { key: "avtoritetny", missing: [{ type: "tattoo" }] },
+    { key: "brigade", missing: [{ type: "clothing" }] },
+  ] }] };
+  const plan = (modeOverrides, smartCollectionEnabled = true) => buildPlanContext.buildBossAutoQueuePlan({
+    candidates: [candidate], selectedIds: new Set([25]), rewards,
+    smartCollectionEnabled, modeOverrides,
+  });
+  assert.equal(plan(new Map([[25, "pacansky"]])).entries[0].mode, "pacansky");
+  assert.equal(plan(new Map()).entries[0].mode, "avtoritetny");
+  assert.equal(plan(new Map(), false).entries[0].mode, "pacansky");
+  assert.equal(plan(new Map([[25, "brigade"]])).entries[0].mode, "brigade");
+  assert.equal(buildPlanContext.getCandidateQueueModeBundle({ ...candidate, availableModes: ["brigade"] }, "auto", ""), null);
+});
+
+test("new catalog bosses do not become selected when an existing selection is restored", () => {
+  const context = {
+    Set,
+    state: { bossRunQueueSelectedIds: new Set([9, 25]), bossRunQueueLegacyExcludedIds: null },
+    collectBossExcludeCheckboxes: () => [],
+    getBossCatalogItems: () => [{ id: 9 }, { id: 25 }, { id: 55 }],
+  };
+  vm.runInNewContext(extractFunctionSource(appSource, "getBossRunQueueSelectedIds"), context);
+  assert.deepEqual([...context.getBossRunQueueSelectedIds()], [9, 25]);
+  context.collectBossExcludeCheckboxes = () => [{ value: "25", checked: false }];
+  assert.deepEqual([...context.getBossRunQueueSelectedIds()], [9]);
+  context.collectBossExcludeCheckboxes = () => [{ value: "55", checked: true }];
+  assert.deepEqual([...context.getBossRunQueueSelectedIds()], [9, 55]);
+});
+
+test("smart collection defaults on while respecting an explicitly saved off preference", () => {
+  const context = { value: null, readAccountStorage: () => context.value, BOSS_SMART_QUEUE_COLLECTION_STORAGE_KEY: "smart" };
+  vm.runInNewContext(extractFunctionSource(appSource, "readBossSmartQueueCollectionPreference"), context);
+  assert.equal(context.readBossSmartQueueCollectionPreference(), true);
+  context.value = "false";
+  assert.equal(context.readBossSmartQueueCollectionPreference(), false);
+  context.value = "true";
+  assert.equal(context.readBossSmartQueueCollectionPreference(), true);
+});
+
+test("queue reward squares show collected out of total separately for battle and combo", () => {
+  const context = {
+    escapeHtml: String,
+    getBossRewardMode: (_id, kind) => kind === "battle" ? { collected: 2, total: 34 } : { collected: 20, total: 34 },
+    getBossCollectionModeLabel: (kind, mode) => `${kind}:${mode}`,
+    buildBossCollectionTooltip: (mode, label) => `${label} ${mode.collected}/${mode.total}`,
+  };
+  vm.runInNewContext(extractFunctionSource(appSource, "renderBossQueueRewardCounter"), context);
+  const battle = context.renderBossQueueRewardCounter(5, "battle", "pacansky");
+  const combo = context.renderBossQueueRewardCounter(5, "combo", "avtoritetny");
+  assert.match(battle, /<small>Бой<\/small><strong>2\/34<\/strong>/);
+  assert.match(combo, /<small>Комбо<\/small><strong>20\/34<\/strong>/);
+  assert.match(combo, /is-missing/);
+});
+
+test("queue combo expense charges only missing weapons and repeated melee resets", () => {
+  const context = {
+    getBossQueueCandidateMap: () => new Map(),
+    state: { bossDashboard: { actions: [
+      { key: "poison", count: 0 }, { key: "gunshot", count: 0 }, { key: "knife", count: 0 },
+    ] } },
+    BOSS_COMBO_ACTION_KEYS: new Set(["kneeEar", "poison", "gunshot", "knife"]),
+    BOSS_MELEE_ACTION_KEYS: new Set(["kneeEar"]),
+    BOSS_FIXED_PRICES: { restoreMelee: 3, poison: 18, gunshot: 5, knife: 4 },
+    getBossComboTemplate: () => ({ sequence: ["kneeEar", "kneeEar", "poison", "gunshot", "knife"] }),
+  };
+  vm.runInNewContext(extractFunctionSource(appSource, "getBossQueueComboCost"), context);
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), 30);
+  context.state.bossDashboard.actions.forEach((action) => { action.count = 1; });
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), 3);
+  context.state.bossDashboard.actions.find((action) => action.key === "knife").count = 0;
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), 7);
+  context.state.bossDashboard.actions = [];
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), null);
+  context.state.bossDashboard.activeSession = { weaponStatsEffective: { counts: { poison: 1, gunshot: 1, knife: 1 } } };
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), 3);
+  assert.equal(context.getBossQueueComboCost({ bossId: 5, skipCombo: true }, "pacansky"), null);
+  context.getBossComboTemplate = () => null;
+  assert.equal(context.getBossQueueComboCost({ bossId: 5 }, "pacansky"), null);
+});
+
+test("Press combo expense is 24 rubles with weapons in stock", () => {
+  const melee = ["punchChest", "kickBalls", "pokeEyes", "kneeEar"];
+  const context = {
+    getBossQueueCandidateMap: () => new Map([[25, { comboRewardRubles: { avtoritetny: 15 } }]]),
+    state: { economy: { weapons: {
+      poison: { count: 100 }, gunshot: { count: 100 }, knife: { count: 100 },
+    } } },
+    BOSS_COMBO_ACTION_KEYS: new Set([...melee, "poison", "gunshot", "knife"]),
+    BOSS_MELEE_ACTION_KEYS: new Set(melee),
+    BOSS_FIXED_PRICES: { restoreMelee: 3, poison: 18, gunshot: 5, knife: 4 },
+    getBossComboTemplate: () => ({ sequence: [
+      "punchChest", "pokeEyes", "knife", "kneeEar", "punchChest",
+      "pokeEyes", "kickBalls", "kneeEar", "kickBalls", "pokeEyes",
+      "kickBalls", "poison", "kickBalls", "kneeEar", "kickBalls",
+      "knife", "poison", "kickBalls", "poison", "pokeEyes",
+      "punchChest", "poison", "gunshot", "punchChest", "knife",
+    ] }),
+  };
+  vm.runInNewContext(extractFunctionSource(appSource, "getBossQueueComboCost"), context);
+  assert.equal(context.getBossQueueComboCost({ bossId: 25 }, "avtoritetny"), 24);
+  assert.equal(context.getBossQueueComboCost({ bossId: 25 }, "pacansky"), 39);
+  context.state.economy.weapons.poison.count = 3;
+  assert.equal(context.getBossQueueComboCost({ bossId: 25 }, "avtoritetny"), 42);
+  context.state.economy.weapons.poison.count = 0;
+  context.state.economy.weapons.gunshot.count = 0;
+  context.state.economy.weapons.knife.count = 0;
+  assert.equal(context.getBossQueueComboCost({ bossId: 25 }, "avtoritetny"), 113);
+});
+
+test("auto participant previews show the resolved mode and its battle or combo collection", () => {
+  const context = {
+    AUTO_BOSS_QUEUE_MODE: "auto", DEFAULT_BOSS_MODE: "pacansky",
+    state: { bossDashboard: { rewards: {} } },
+    smart: true,
+    isBossSmartQueueCollectionEnabled: () => context.smart,
+    getBossSmartQueueMissingBattleModes: () => [{ mode: "avtoritetny" }],
+    getPreferredBossComboTemplateMode: () => "avtoritetny",
+    getCandidateQueueModeBundle: buildPlanContext.getCandidateQueueModeBundle,
+    escapeHtml: String, formatBossModeLabel: String,
+    renderBossQueueRewardCounter: (_id, kind, mode) => `<square>${kind}:${mode}:2/34</square>`,
+  };
+  vm.runInNewContext([
+    extractFunctionSource(appSource, "resolveBossAutoQueuePreferredMode"),
+    extractFunctionSource(appSource, "renderBossAutoModePreview"),
+  ].join("\n"), context);
+  const boss = { id: 25, selectedMode: "brigade", availableModes: ["pacansky", "avtoritetny", "brigade"], comboModes: ["pacansky", "avtoritetny"] };
+  assert.match(context.renderBossAutoModePreview(boss, "auto", "battle"), /→ avtoritetny.*battle:avtoritetny:2\/34/);
+  assert.match(context.renderBossAutoModePreview(boss, "pacansky", "battle"), /battle:pacansky:2\/34/);
+  assert.match(context.renderBossAutoModePreview(boss, "auto", "combo"), /→ avtoritetny.*combo:avtoritetny:2\/34/);
+  assert.doesNotMatch(context.renderBossAutoModePreview(boss, "none", "combo"), /square/);
+  context.smart = false;
+  assert.match(context.renderBossAutoModePreview(boss, "auto", "battle"), /→ pacansky/);
+});
+
+test("queue formation stays busy through refresh, rejects duplicate builds, and clears busy on failure", async () => {
+  let release;
+  const phases = [];
+  let refreshCalls = 0;
+  const context = {
+    state: {},
+    setBossQueueBuildStatus(busy, message) { context.state.bossQueueBuilding = busy; phases.push({ busy, message }); },
+    setServerStatus() {}, appendLog() {}, appendDiagnosticError() {},
+    handleBossDashboard() { refreshCalls += 1; return new Promise((resolve) => { release = resolve; }); },
+    handleZarubaDashboard: async () => { throw new Error("Refresh failed"); },
+  };
+  vm.runInNewContext(extractFunctionSource(appSource, "handleBossRunQueueBuild"), context);
+  const operation = context.handleBossRunQueueBuild();
+  assert.equal(context.state.bossQueueBuilding, true);
+  await context.handleBossRunQueueBuild();
+  assert.equal(refreshCalls, 1);
+  release();
+  await operation;
+  assert.equal(context.state.bossQueueBuilding, false);
+  assert.match(phases.at(-1).message, /Не удалось/);
+});
+
+test("visible queue key plan waits for a normal battle victory and keeps damage tasks conservative", () => {
+  const candidates = [
+    { id: 9, canStart: true, remainingToday: 1, requiredKeys: 0, keyBypassed: true, baseHp: 1000, rewardKeysPerWin: 1 },
+    { id: 10, canStart: true, remainingToday: 1, requiredKeys: 1, keySourceBossId: 9, ownBossKeysOwned: 0, baseHp: 1000 },
+  ];
+  const queue = [{ bossId: 9, mode: "pacansky" }, { bossId: 10, mode: "pacansky" }];
+  const projected = buildPlanContext.buildBossRunQueueKeyProjection(queue, candidates, [], { assumeVictory: true });
+  assert.equal(projected.get(1).hasEnoughKeys, true);
+  assert.equal(projected.get(1).planned, true);
+  queue[0].zarubaObjective = "damage";
+  const damagePlan = buildPlanContext.buildBossRunQueueKeyProjection(queue, candidates, [], { assumeVictory: true });
+  assert.equal(damagePlan.get(1).hasEnoughKeys, false);
+  delete queue[0].zarubaObjective;
+  candidates[0].remainingToday = 0;
+  const blockedPlan = buildPlanContext.buildBossRunQueueKeyProjection(queue, candidates, [], { assumeVictory: true });
+  assert.equal(blockedPlan.get(1).hasEnoughKeys, false);
 });
