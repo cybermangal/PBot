@@ -14,6 +14,8 @@ let globalRequestQueue = Promise.resolve();
 let globalNextRequestAt = 0;
 let gameRequestSequence = 0;
 const authRefreshPromises = new Map();
+const authRefreshFailures = new Map();
+const AUTH_FAILURE_RETRY_MS = 60_000;
 
 function nextGameRequestId() {
   gameRequestSequence += 1;
@@ -256,15 +258,27 @@ async function createApiClient(options = {}) {
     throw new Error("Missing accessToken. Open the UI and sign in with InitData first.");
   }
 
-  async function persistTokens() {
+  async function persistTokens(expectedAccessToken) {
     if (!persistSession || !session || !session.game) {
       return;
     }
 
+    const latestSession = await loadSessionSnapshot(sessionPath);
+    const latestAccessToken = latestSession && latestSession.game && latestSession.game.accessToken;
+    if (latestAccessToken && latestAccessToken !== expectedAccessToken) {
+      const error = new Error("Active account changed while refreshing tokens.");
+      error.code = "AUTH_SESSION_CHANGED";
+      throw error;
+    }
+    const targetSession = latestSession && latestSession.game ? latestSession : session;
+    targetSession.game.accessToken = accessToken;
+    targetSession.game.refreshToken = refreshToken;
+    targetSession.generatedAt = new Date().toISOString();
     session.game.accessToken = accessToken;
     session.game.refreshToken = refreshToken;
-    session.generatedAt = new Date().toISOString();
-    await writeSessionSnapshot(sessionPath, session);
+    session.generatedAt = targetSession.generatedAt;
+    await writeSessionSnapshot(sessionPath, targetSession);
+    authRefreshFailures.delete(`${sessionPath}|${baseUrl}`);
   }
 
   async function reusePersistedTokensIfChanged() {
@@ -281,7 +295,8 @@ async function createApiClient(options = {}) {
       return null;
     }
     accessToken = latestAccessToken;
-    refreshToken = latestRefreshToken || refreshToken;
+    refreshToken = latestRefreshToken || null;
+    authRefreshFailures.delete(`${sessionPath}|${baseUrl}`);
     return {
       ok: true,
       status: 0,
@@ -296,104 +311,97 @@ async function createApiClient(options = {}) {
       throw new Error("Cannot refresh auth without refreshToken.");
     }
 
-    const attempts = [
-      {
-        headers: {
-          Authorization: `Bearer ${refreshToken}`,
-          "Content-Type": "application/json",
-          Connection: "keep-alive",
-        },
-        body: JSON.stringify({ refreshToken }),
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Connection: "keep-alive",
-        },
-        body: JSON.stringify({ refreshToken }),
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Connection: "keep-alive",
-        },
-        body: JSON.stringify({ token: refreshToken }),
-      },
-    ];
-
-    let lastError = null;
-
-    for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
-      const attempt = attempts[attemptIndex];
-      const requestId = nextGameRequestId();
-      const startedAt = Date.now();
-      if (VERBOSE_LOGGING) {
-        logEvent("game.auth.refresh.request", {
-          requestId,
-          attempt: attemptIndex + 1,
-          origin: new URL(baseUrl).origin,
-          endpoint: "/api/auth/refresh",
-        });
-      }
-
-      try {
-        const response = await fetch(`${baseUrl}/api/auth/refresh`, {
-          method: "POST",
-          headers: attempt.headers,
-          body: attempt.body,
-        });
-
-        const text = await response.text();
-        const payload = parseMaybeJson(text, response.headers.get("content-type"));
-        const responseBytes = Buffer.byteLength(text);
-        const applicationError = payload && typeof payload === "object" && payload.success === false;
-        const elapsedMs = Date.now() - startedAt;
-        if (VERBOSE_LOGGING || !response.ok || applicationError || elapsedMs >= SLOW_GAME_REQUEST_MS) {
-          logEvent("game.auth.refresh.response", {
-            requestId,
-            attempt: attemptIndex + 1,
-            status: response.status,
-            ok: response.ok,
-            elapsedMs,
-            retryAfter: response.headers.get("retry-after"),
-            responseBytes,
-            data: VERBOSE_LOGGING || !response.ok || applicationError ? payload : undefined,
-          });
-        }
-
-        if (!response.ok) {
-          lastError = new Error(`Refresh failed: HTTP ${response.status}`);
-          // A rejected token and a rate limit cannot be fixed by changing the
-          // request body. Retrying immediately only multiplies failed calls.
-          if (response.status === 429 || getGameResponseMessage(payload).toLowerCase() === "invalid_token") {
-            throw lastError;
-          }
-          continue;
-        }
-
-        const nextTokens = extractTokens(payload) || {};
-        accessToken = nextTokens.accessToken || accessToken;
-        refreshToken = nextTokens.refreshToken || refreshToken;
-        await persistTokens();
-
-        return {
-          ok: true,
-          status: response.status,
-          data: payload,
-          tokens: { accessToken, refreshToken },
-        };
-      } catch (error) {
-        logEvent("game.auth.refresh.error", {
-          requestId,
-          attempt: attemptIndex + 1,
-          elapsedMs: Date.now() - startedAt,
-          error,
-        });
-        throw error;
-      }
+    // The game client sends the refresh credential in the `refresh` body field.
+    // Its endpoint rejects the old refreshToken/Authorization variants with 401.
+    const previousAccessToken = accessToken;
+    const requestId = nextGameRequestId();
+    const startedAt = Date.now();
+    if (VERBOSE_LOGGING) {
+      logEvent("game.auth.refresh.request", {
+        requestId,
+        origin: new URL(baseUrl).origin,
+        endpoint: "/api/auth/refresh",
+      });
     }
 
-    throw lastError || new Error("Refresh failed.");
+    try {
+      const response = await fetch(`${baseUrl}/api/auth/refresh`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({ refresh: refreshToken }),
+      });
+
+      const text = await response.text();
+      const payload = parseMaybeJson(text, response.headers.get("content-type"));
+      const responseBytes = Buffer.byteLength(text);
+      const applicationError = payload && typeof payload === "object" && payload.success === false;
+      const elapsedMs = Date.now() - startedAt;
+      if (VERBOSE_LOGGING || !response.ok || applicationError || elapsedMs >= SLOW_GAME_REQUEST_MS) {
+        logEvent("game.auth.refresh.response", {
+          requestId,
+          status: response.status,
+          ok: response.ok,
+          elapsedMs,
+          retryAfter: response.headers.get("retry-after"),
+          responseBytes,
+          data: VERBOSE_LOGGING || !response.ok || applicationError ? payload : undefined,
+        });
+      }
+
+      const nextTokens = extractTokens(payload);
+      if (!response.ok || payload && payload.success === false || !nextTokens || !nextTokens.accessToken) {
+        const error = new Error(`Refresh failed: ${getGameResponseMessage(payload) || `HTTP ${response.status}`}`);
+        error.status = response.status;
+        error.authRejected = response.status === 401 || getGameResponseMessage(payload).toLowerCase() === "invalid_token";
+        throw error;
+      }
+      accessToken = nextTokens.accessToken;
+      refreshToken = nextTokens.refreshToken || refreshToken;
+      await persistTokens(previousAccessToken);
+
+      return {
+        ok: true,
+        status: response.status,
+        data: payload,
+        tokens: { accessToken, refreshToken },
+      };
+    } catch (error) {
+      logEvent("game.auth.refresh.error", {
+        requestId,
+        elapsedMs: Date.now() - startedAt,
+        error,
+      });
+      throw error;
+    }
+  }
+
+  async function loginWithStoredInitData() {
+    const initData = session && session.telegram && session.telegram.initData;
+    if (!persistSession || !initData) {
+      throw new Error("Stored InitData is unavailable. Sign in again with fresh InitData.");
+    }
+    const response = await fetch(`${baseUrl}/api/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initData }),
+    });
+    const payload = parseMaybeJson(await response.text(), response.headers.get("content-type"));
+    const tokens = extractTokens(payload);
+    if (!response.ok || payload && payload.success === false || !tokens || !tokens.accessToken) {
+      const error = new Error(`Stored InitData login failed: ${getGameResponseMessage(payload) || `HTTP ${response.status}`}`);
+      error.status = response.status;
+      logEvent("game.auth.login.error", { status: response.status, error });
+      throw error;
+    }
+    const previousAccessToken = accessToken;
+    accessToken = tokens.accessToken;
+    refreshToken = tokens.refreshToken || null;
+    await persistTokens(previousAccessToken);
+    logEvent("game.auth.login.recovered", { status: response.status });
+    return { ok: true, status: response.status, data: payload, tokens: { accessToken, refreshToken } };
   }
 
   async function refreshAuth() {
@@ -407,11 +415,37 @@ async function createApiClient(options = {}) {
     }
 
     const refreshKey = `${sessionPath}|${baseUrl}`;
+    const previousFailure = authRefreshFailures.get(refreshKey);
+    if (previousFailure && previousFailure.accessToken === accessToken
+      && previousFailure.refreshToken === refreshToken && previousFailure.until > Date.now()) {
+      throw previousFailure.error;
+    }
+    authRefreshFailures.delete(refreshKey);
     let refreshPromise = authRefreshPromises.get(refreshKey);
     if (!refreshPromise) {
       refreshPromise = (async () => {
         try {
+          if (!refreshToken && session && session.telegram && session.telegram.initData) {
+            return await loginWithStoredInitData();
+          }
           return await performRefreshAuth();
+        } catch (error) {
+          if (error.authRejected && refreshToken && session && session.telegram && session.telegram.initData) {
+            try {
+              return await loginWithStoredInitData();
+            } catch (loginError) {
+              error = loginError;
+            }
+          }
+          if (error.authRejected || error.status === 401 || error.status === 429) {
+            authRefreshFailures.set(refreshKey, {
+              error,
+              until: Date.now() + AUTH_FAILURE_RETRY_MS,
+              accessToken,
+              refreshToken,
+            });
+          }
+          throw error;
         } finally {
           authRefreshPromises.delete(refreshKey);
         }
@@ -535,6 +569,18 @@ async function createApiClient(options = {}) {
     let result;
 
     while (true) {
+      if (persistSession) {
+        const refreshKey = `${sessionPath}|${baseUrl}`;
+        const previousFailure = authRefreshFailures.get(refreshKey);
+        if (previousFailure && previousFailure.accessToken === accessToken
+          && previousFailure.refreshToken === refreshToken && previousFailure.until > Date.now()) {
+          const reused = await reusePersistedTokensIfChanged();
+          if (!reused) {
+            throw previousFailure.error;
+          }
+          headers.Authorization = `Bearer ${accessToken}`;
+        }
+      }
       result = await doFetch();
 
       if (!result.ok && isAuthenticationFailure(result, url.pathname) && options.retryOnAuth !== false && !authRetried) {
@@ -546,7 +592,14 @@ async function createApiClient(options = {}) {
             nextAction: "refresh_auth",
           });
         }
-        await refreshAuth();
+        try {
+          await refreshAuth();
+        } catch (error) {
+          if (error.authRejected || error.status === 401 || /cannot refresh auth|stored initdata.*invalid/i.test(error.message || "")) {
+            error.code = "AUTH_REQUIRED";
+          }
+          throw error;
+        }
         headers.Authorization = `Bearer ${accessToken}`;
         authRetried = true;
         continue;
@@ -576,6 +629,13 @@ async function createApiClient(options = {}) {
     result.requestAttempts = requestAttempt;
     result.rateLimitRetries = rateLimitAttempt;
     result.authRetried = authRetried;
+
+    if (!result.ok && isAuthenticationFailure(result, url.pathname) && options.retryOnAuth !== false) {
+      const error = new Error(`Game authorization failed: HTTP ${result.status}`);
+      error.code = "AUTH_REQUIRED";
+      error.status = result.status;
+      throw error;
+    }
 
     if (!result.ok && options.throwOnHttpError) {
       throw new Error(`${method} ${url.pathname} failed: HTTP ${result.status}`);

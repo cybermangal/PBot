@@ -1002,8 +1002,14 @@ function normalizeAuthAccountEntry(value) {
 }
 
 function compareAuthAccountFreshness(left, right) {
-  const leftUpdated = Date.parse(left && (left.lastUsedAt || left.updatedAt) || "") || 0;
-  const rightUpdated = Date.parse(right && (right.lastUsedAt || right.updatedAt) || "") || 0;
+  const leftUpdated = Math.max(
+    Date.parse(left && left.lastUsedAt || "") || 0,
+    Date.parse(left && left.updatedAt || "") || 0,
+  );
+  const rightUpdated = Math.max(
+    Date.parse(right && right.lastUsedAt || "") || 0,
+    Date.parse(right && right.updatedAt || "") || 0,
+  );
   if (leftUpdated !== rightUpdated) {
     return leftUpdated - rightUpdated;
   }
@@ -1194,7 +1200,10 @@ async function requestInitDataTokens(initData, baseUrl) {
   const tokens = extractTokensFromAuthResponse(payload);
   if (!response.ok || !payloadSuccess || !tokens || !tokens.accessToken) {
     const message = payload && payload.message ? String(payload.message) : `HTTP ${response.status}`;
-    throw new Error(`Keep-alive auth failed: ${message}`);
+    const error = new Error(`Keep-alive auth failed: ${message}`);
+    error.status = response.status;
+    error.authRejected = response.status === 401 || /invalid.*initdata|invalid_token/i.test(message);
+    throw error;
   }
   return {
     tokens,
@@ -1231,23 +1240,6 @@ async function pingSavedAuthAccount(account, baseUrl) {
         tokenError = error;
       }
     }
-    try {
-      const response = await client.players.init({ rateLimitRetries: 0, retryOnAuth: false });
-      const payload = response && response.data;
-      const payloadSuccess = payload && typeof payload === "object" && Object.hasOwn(payload, "success")
-        ? Boolean(payload.success)
-        : true;
-      if (!response || !response.ok || !payloadSuccess) {
-        throw new Error(`Keep-alive request failed: HTTP ${response && response.status || 0}`);
-      }
-      return {
-        accessToken: client.accessToken,
-        refreshToken: client.refreshToken || null,
-        nickname: extractPlayerNickname(payload, account.selfUserId),
-      };
-    } catch (error) {
-      tokenError ||= error;
-    }
   }
 
   if (account.initData) {
@@ -1257,10 +1249,19 @@ async function pingSavedAuthAccount(account, baseUrl) {
       nickname: result.nickname,
     }));
   }
-  throw tokenError || new Error("Saved account does not contain reusable credentials.");
+  throw tokenError || new Error("Saved account has no refreshToken or reusable InitData.");
 }
 
-async function keepAliveSavedAuthAccounts(sessionPath) {
+let authAccountMaintenance = Promise.resolve();
+const authAccountKeepAliveRejections = new Map();
+
+function runAuthAccountMaintenance(task) {
+  const run = authAccountMaintenance.catch(() => undefined).then(task);
+  authAccountMaintenance = run.catch(() => undefined);
+  return run;
+}
+
+async function keepAliveSavedAuthAccountsUnlocked(sessionPath) {
   const registry = await loadAuthAccountRegistry(sessionPath);
   const { session } = await loadSessionSnapshotSafe(registry.resolvedSessionPath);
   const baseUrl = resolveBaseUrlForSession(session);
@@ -1270,22 +1271,38 @@ async function keepAliveSavedAuthAccounts(sessionPath) {
   let skippedActive = 0;
 
   for (const account of registry.accounts) {
-    if (activeAccountId && account.accountId === activeAccountId) {
+    const { session: latestSession } = await loadSessionSnapshotSafe(registry.resolvedSessionPath);
+    const currentAccountId = buildAuthSummary(latestSession, { sessionExists: true }).selfUserId;
+    if ((activeAccountId && account.accountId === activeAccountId)
+      || (currentAccountId && account.accountId === currentAccountId)) {
       updatedAccounts.push(account);
       skippedActive += 1;
       continue;
     }
+    const credentialFingerprint = createHash("sha256")
+      .update(`${account.accessToken || ""}|${account.refreshToken || ""}|${account.initData || ""}`)
+      .digest("hex");
+    const rejectionKey = `${registry.resolvedSessionPath}|${account.accountId}`;
+    if (authAccountKeepAliveRejections.get(rejectionKey) === credentialFingerprint) {
+      updatedAccounts.push(account);
+      failures.push({ accountId: account.accountId, error: "Credentials need a new login." });
+      continue;
+    }
     try {
       const refreshed = await pingSavedAuthAccount(account, baseUrl);
+      authAccountKeepAliveRejections.delete(rejectionKey);
       updatedAccounts.push({
         ...account,
         accessToken: refreshed.accessToken || account.accessToken || null,
-        refreshToken: refreshed.refreshToken || account.refreshToken || null,
+        refreshToken: refreshed.refreshToken || null,
         nickname: refreshed.nickname || account.nickname || null,
         updatedAt: new Date().toISOString(),
       });
     } catch (error) {
       updatedAccounts.push(account);
+      if (error.authRejected || error.status === 401 || /no refreshToken or reusable InitData/i.test(error.message || "")) {
+        authAccountKeepAliveRejections.set(rejectionKey, credentialFingerprint);
+      }
       failures.push({
         accountId: account.accountId,
         error: error && error.message ? String(error.message) : "keep-alive failed",
@@ -1294,7 +1311,13 @@ async function keepAliveSavedAuthAccounts(sessionPath) {
   }
 
   if (registry.accounts.length > 0) {
-    await saveAuthAccountRegistry(registry.registryPath, mergeAuthAccountEntries(updatedAccounts));
+    const latest = await readAuthAccountRegistry(registry.resolvedSessionPath);
+    const refreshedById = new Map(updatedAccounts.map((account) => [account.accountId, account]));
+    const accounts = mergeAuthAccountEntries(latest.accounts).map((account) => {
+      const refreshed = refreshedById.get(account.accountId);
+      return refreshed && compareAuthAccountFreshness(account, refreshed) <= 0 ? refreshed : account;
+    });
+    await saveAuthAccountRegistry(registry.registryPath, accounts);
   }
   const result = {
     attempted: registry.accounts.length - skippedActive,
@@ -1305,6 +1328,10 @@ async function keepAliveSavedAuthAccounts(sessionPath) {
   };
   logEvent("auth.accounts.keep_alive", result);
   return result;
+}
+
+function keepAliveSavedAuthAccounts(sessionPath) {
+  return runAuthAccountMaintenance(() => keepAliveSavedAuthAccountsUnlocked(sessionPath));
 }
 
 function getJwtExpMs(payload) {
@@ -1364,11 +1391,7 @@ function buildAuthSummary(session, options = {}) {
     reason = "access-token-expired-refresh-available";
   }
 
-  const isActive = Boolean(accessToken) && (
-    reason === "session-ready"
-    || reason === "access-token-expired-refresh-available"
-    || hasUsableAccessToken
-  );
+  const isActive = hasUsableAccessToken;
 
   return {
     selfUserId: userId,
@@ -1394,20 +1417,34 @@ async function getAuthStatus(options = {}, sessionPath) {
   const baseUrl = resolveBaseUrlForSession(session, options.baseUrl);
   let auth = buildAuthSummary(session, { sessionExists: exists });
 
-  if (auth.reason === "access-token-expired-refresh-available") {
+  const accessExpMs = getJwtExpMs(decodeJwtPayload(session && session.game && session.game.accessToken));
+  const refreshExpMs = getJwtExpMs(decodeJwtPayload(session && session.game && session.game.refreshToken));
+  const refreshSoon = auth.hasRefreshToken
+    && (refreshExpMs === null || refreshExpMs > Date.now())
+    && accessExpMs !== null
+    && accessExpMs - Date.now() <= 120_000;
+  if (auth.reason === "access-token-expired-refresh-available" || (auth.isActive && refreshSoon)) {
     try {
       const client = await createApiClient({ sessionPath: resolvedSessionPath, session, baseUrl });
       await client.refreshAuth();
       ({ session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath));
       auth = buildAuthSummary(session, { sessionExists: exists });
+      if (!auth.isActive) {
+        auth = { ...auth, requiresLogin: true, reason: "refresh-failed" };
+      }
     } catch (error) {
       logEvent("auth.status.refresh_failed", { error });
-      auth = {
-        ...auth,
-        isActive: false,
-        requiresLogin: true,
-        reason: "refresh-failed",
-      };
+      if (error.code === "AUTH_SESSION_CHANGED") {
+        ({ session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath));
+        auth = buildAuthSummary(session, { sessionExists: exists });
+      } else if ((accessExpMs !== null && accessExpMs <= Date.now()) || error.authRejected || error.status === 401) {
+        auth = {
+          ...auth,
+          isActive: false,
+          requiresLogin: true,
+          reason: "refresh-failed",
+        };
+      }
     }
   }
 
@@ -1421,7 +1458,7 @@ async function getAuthStatus(options = {}, sessionPath) {
   };
 }
 
-async function loginByInitData(options = {}, sessionPath) {
+async function loginByInitDataUnlocked(options = {}, sessionPath) {
   const resolvedSessionPath = resolveSessionPath(sessionPath);
   const { session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath);
   const providedInitData = typeof options.initData === "string" ? options.initData.trim() : "";
@@ -1517,7 +1554,7 @@ async function loginByInitData(options = {}, sessionPath) {
     session.game = {};
   }
   session.game.accessToken = tokens.accessToken;
-  session.game.refreshToken = tokens.refreshToken || (sameAccount ? session.game.refreshToken : null) || null;
+  session.game.refreshToken = tokens.refreshToken || null;
   session.game.frameUrl = session.game.frameUrl || session.frameUrl || `${baseUrl}/game`;
   const existingLocalStorageKeys = Array.isArray(session.game.localStorageKeys) ? session.game.localStorageKeys : [];
   session.game.localStorageKeys = [...new Set([...existingLocalStorageKeys, "accessToken", "refreshToken"])];
@@ -1562,7 +1599,11 @@ async function loginByInitData(options = {}, sessionPath) {
   };
 }
 
-async function loginByTokens(options = {}, sessionPath) {
+function loginByInitData(options = {}, sessionPath) {
+  return runAuthAccountMaintenance(() => loginByInitDataUnlocked(options, sessionPath));
+}
+
+async function loginByTokensUnlocked(options = {}, sessionPath) {
   const resolvedSessionPath = resolveSessionPath(sessionPath);
   const { session, exists } = await loadSessionSnapshotSafe(resolvedSessionPath);
   const providedAccessToken = typeof options.accessToken === "string" ? options.accessToken.trim() : "";
@@ -1597,6 +1638,9 @@ async function loginByTokens(options = {}, sessionPath) {
   });
   let validation;
   try {
+    if (providedRefreshToken) {
+      await client.refreshAuth();
+    }
     validation = await client.players.init({ rateLimitRetries: 0 });
   } catch (error) {
     const message = error && error.message ? String(error.message) : "token validation failed";
@@ -1710,7 +1754,11 @@ async function loginByTokens(options = {}, sessionPath) {
   };
 }
 
-async function switchSavedAuthAccount(options = {}, sessionPath) {
+function loginByTokens(options = {}, sessionPath) {
+  return runAuthAccountMaintenance(() => loginByTokensUnlocked(options, sessionPath));
+}
+
+async function switchSavedAuthAccountUnlocked(options = {}, sessionPath) {
   const accountId = typeof options.accountId === "string" ? options.accountId.trim() : "";
   if (!accountId) {
     throw new Error("accountId is required.");
@@ -1723,7 +1771,7 @@ async function switchSavedAuthAccount(options = {}, sessionPath) {
   let tokenError = null;
   if (account.accessToken) {
     try {
-      return await loginByTokens({
+      return await loginByTokensUnlocked({
         accessToken: account.accessToken,
         refreshToken: account.refreshToken || "",
       }, registry.resolvedSessionPath);
@@ -1733,13 +1781,17 @@ async function switchSavedAuthAccount(options = {}, sessionPath) {
   }
   if (account.initData) {
     try {
-      return await loginByInitData({ initData: account.initData }, registry.resolvedSessionPath);
+      return await loginByInitDataUnlocked({ initData: account.initData }, registry.resolvedSessionPath);
     } catch (error) {
       // Prefer the token error because it explains whether refresh credentials expired.
       throw tokenError || error;
     }
   }
   throw tokenError || new Error("Saved account does not contain reusable credentials.");
+}
+
+function switchSavedAuthAccount(options = {}, sessionPath) {
+  return runAuthAccountMaintenance(() => switchSavedAuthAccountUnlocked(options, sessionPath));
 }
 
 function parsePositiveIntList(value) {
@@ -2274,6 +2326,18 @@ function restoreBossAutomationRecentActivity(events) {
         at: details.at || event.at,
       });
       markBossAutomationLastStartedRewardSettled(restoredReward);
+      continue;
+    }
+    if (event.type === "reward_settlement_exhausted") {
+      const started = bossAutomationRuntime.lastStarted;
+      const sessionId = started && pickString(
+        started.settle && started.settle.sessionId,
+        started.snapshot && started.snapshot.sessionId,
+        null,
+      );
+      if (started && details.sessionId && details.sessionId === sessionId) {
+        started.rewardSettlementExhaustedAt = event.at;
+      }
       continue;
     }
     if (event.type === "queue_item_start_confirmed") {
@@ -3153,6 +3217,7 @@ function getBossAutomationSessionLossRewardContext(lastStarted, summary, recentA
     || current.rewardClaimed === true
     || !started
     || !item
+    || started.rewardSettlementExhaustedAt
   ) {
     return null;
   }
@@ -7800,6 +7865,7 @@ async function runBossRewardSettlementTask(task) {
   });
 
   let lastResponse = null;
+  let lastSnapshot = null;
   for (let index = 0; index < BOSS_REWARD_BACKGROUND_RETRY_DELAYS_MS.length; index += 1) {
     await sleep(BOSS_REWARD_BACKGROUND_RETRY_DELAYS_MS[index]);
     if (bossRewardSettlementTasks.get(task.key) !== task) {
@@ -7815,6 +7881,7 @@ async function runBossRewardSettlementTask(task) {
       continue;
     }
     const summary = getBossAutomationSummaryFrom(snapshot) || {};
+    lastSnapshot = snapshot;
     if (summary.rewardClaimed === true) {
       await recordBossAutomationClaimActivity({
         ok: true,
@@ -7884,7 +7951,38 @@ async function runBossRewardSettlementTask(task) {
     });
   }
   clearBossRewardSettlementTask(task);
+  if (markBossAutomationRewardSettlementExhausted(bossAutomationRuntime.lastStarted, task, lastSnapshot, lastResponse)) {
+    await appendBossAutomationEvent("reward_settlement_exhausted", {
+      bossId: task.bossId,
+      sessionId: task.sessionId,
+      reason: "no_session_or_reward_after_retries",
+    });
+  }
   scheduleBossAutomationImmediateTick("reward_settlement_finished");
+}
+
+function markBossAutomationRewardSettlementExhausted(started, task, snapshot, response) {
+  const summary = getBossAutomationSummaryFrom(snapshot) || {};
+  const message = getGameResponseMessage(response) || "";
+  if (!started || !task || summary.stateReliable !== true
+    || summary.stateUnknown === true || summary.hasSession !== false
+    || summary.hasReward !== false || summary.rewardReady !== false
+    || !response || response.ok !== true || Number(response.status) !== 200
+    || isSuccessfulGameResponse(response)
+    || !/Награда ещё не готова|reward[_ ]not[_ ]ready/i.test(message)) {
+    return false;
+  }
+  const sessionId = pickString(started.settle && started.settle.sessionId,
+    started.snapshot && started.snapshot.sessionId, null);
+  const queueItemId = started.item && started.item.queueItemId;
+  if (!(task.sessionId && sessionId === task.sessionId
+    || queueItemId && task.item && queueItemId === task.item.queueItemId)) {
+    return false;
+  }
+  // A disappeared fight may have expired or been claimed elsewhere. Do not
+  // infer a successful reward, but do not recreate the same retry task forever.
+  started.rewardSettlementExhaustedAt = new Date().toISOString();
+  return true;
 }
 
 function scheduleBossRewardSettlement(client, bossId, initialSnapshot, options = {}) {
@@ -8000,7 +8098,7 @@ function isBossMeleeCooldownActiveAt(cooldown, nowMs = Date.now()) {
   return cooldown.active === true;
 }
 
-function applyBossMeleeCooldownAfterHit(snapshot, item, hit, previousSnapshot = null, nowMs = Date.now()) {
+function applyBossMeleeCooldownAfterHit(snapshot, item, hit, previousSnapshot = null, nowMs = Date.now(), refreshCooldown = false) {
   const key = String(item && item.type || hit && hit.type || "").trim();
   if (
     !snapshot
@@ -8032,7 +8130,7 @@ function applyBossMeleeCooldownAfterHit(snapshot, item, hit, previousSnapshot = 
     ? previousCooldowns[key]
     : {};
 
-  if (isBossMeleeCooldownActiveAt(currentCooldown, nowMs)) {
+  if (!refreshCooldown && isBossMeleeCooldownActiveAt(currentCooldown, nowMs)) {
     return snapshot;
   }
 
@@ -8228,6 +8326,9 @@ function buildBossFastInitialSnapshot(plan) {
       maxHp,
       mode,
       personalDamage: pickNumeric(activeSession ? activeSession.personalDamage : null, 0, null),
+      meleeCooldowns: activeSession && activeSession.meleeCooldowns
+        ? activeSession.meleeCooldowns
+        : {},
       friendDamageItemsCount: 0,
       rewardStatus: null,
       rewardBossId: null,
@@ -8432,6 +8533,17 @@ async function executeBossRunnerLoop(client, plan, options = {}) {
     }
     return restore;
   };
+  const recordRestore = (restore) => {
+    result.restore.attempted += 1;
+    if (restore.ok) {
+      result.restore.succeeded += 1;
+      for (const [currency, amount] of Object.entries(restore.spentByCurrency || {})) {
+        result.restore.spentByCurrency[currency] = (result.restore.spentByCurrency[currency] || 0) + Number(amount || 0);
+      }
+    } else {
+      result.restore.failed += 1;
+    }
+  };
 
   if (plan.startPlan.action === "start-attack") {
     const startAttackStartedAtMs = Date.now();
@@ -8490,28 +8602,30 @@ async function executeBossRunnerLoop(client, plan, options = {}) {
       if (hitsStartedAtMs === null) {
         hitsStartedAtMs = Date.now();
       }
+      let restore = null;
+      if (
+        autoRestoreMeleeCooldown
+        && meleeAction
+        && isBossMeleeCooldownActiveAt(currentSnapshot.summary.meleeCooldowns?.[item.type], Date.now() + 1_000)
+      ) {
+        restore = await restoreMeleeCooldown(item);
+        recordRestore(restore);
+      }
       let response = meleeAction
         ? await useMeleeWeapon(item)
         : await client.bosses.useWeapon(item.payload, hitRequestOptions);
-      let restore = null;
       let purchase = null;
 
       if (
         autoRestoreMeleeCooldown
         && meleeAction
         && isBossCooldownBlockedResponse(response)
+        && !restore
       ) {
         restore = await restoreMeleeCooldown(item);
-        result.restore.attempted += 1;
-
+        recordRestore(restore);
         if (restore.ok) {
-          result.restore.succeeded += 1;
-          for (const [currency, amount] of Object.entries(restore.spentByCurrency || {})) {
-            result.restore.spentByCurrency[currency] = (result.restore.spentByCurrency[currency] || 0) + Number(amount || 0);
-          }
           response = await useMeleeWeapon(item);
-        } else {
-          result.restore.failed += 1;
         }
       }
 
@@ -8536,7 +8650,14 @@ async function executeBossRunnerLoop(client, plan, options = {}) {
         ? await loadBossRuntimeSnapshot(client, selectedBossId)
         : buildBossSnapshotFromHitResponse(currentSnapshot, response);
       const hit = buildBossHitOutcome(item, response, currentSnapshot, nextSnapshot);
-      nextSnapshot = applyBossMeleeCooldownAfterHit(nextSnapshot, item, hit, currentSnapshot, lastHitResponseAtMs);
+      nextSnapshot = applyBossMeleeCooldownAfterHit(
+        nextSnapshot,
+        item,
+        hit,
+        currentSnapshot,
+        lastHitResponseAtMs,
+        Boolean(restore?.ok && !snapshotAfterEachHit),
+      );
       hit.snapshot = nextSnapshot && nextSnapshot.summary ? nextSnapshot.summary : null;
       if (
         comboFinishedAtMs === null
@@ -18928,6 +19049,7 @@ module.exports = {
     settleBossRewardClaim,
     recordBossClaimResultActivity,
     getBossAutomationSessionLossRewardContext,
+    markBossAutomationRewardSettlementExhausted,
     shouldPollBossAutomationUnsettledReward,
     doesBossRewardSettlementTaskMatch,
     trimBossAutomationEvents,

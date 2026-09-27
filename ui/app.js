@@ -52,6 +52,7 @@ const BOSS_MODE_LABELS = {
   avtoritetny: "Авторитетный",
   vorovskoy: "Воровской",
   odin: "В одного",
+  brigade: "Бригадный",
 };
 const SOLO_BOSS_MODE = "odin";
 const SOLO_BOSS_QUEUE_WARNING_HP_THRESHOLD = 1_000_000;
@@ -85,7 +86,6 @@ const BOSS_EXCLUDE_BUILT_IN_TEMPLATES = Object.freeze([
     modeByBossId: Object.freeze({ 1: "odin", 2: "odin", 17: "blotnoy", 39: "avtoritetny" }),
   }),
 ]);
-const SMART_BOSS_QUEUE_COLLECTION_HP_LIMIT = 3_000_000_000;
 const BOSS_COMBO_MODE_MARKERS = {
   pacansky: "П",
   blotnoy: "Б",
@@ -676,7 +676,7 @@ const UI_TEXT_TRANSLATIONS = Object.freeze({
   "Collecting": "Сбор данных",
   "Collection": "Коллекция",
   "Combo": "Комбо",
-  "Combo cost": "Стоимость комбо",
+  "Combo cost": "Расход комбо",
   "Combo pierced": "Комбо пробито",
   "Complete modes": "Завершённые режимы",
   "Count": "Количество",
@@ -1159,7 +1159,7 @@ const state = {
   bossRunQueueSelectedIds: null,
   bossRunQueueLegacyExcludedIds: null,
   bossQueueSettings: null,
-  bossSmartQueueCollectionEnabled: false,
+  bossSmartQueueCollectionEnabled: true,
   bossExcludeTemplates: {},
   bossExcludeTemplateId: BOSS_EXCLUDE_DEFAULT_TEMPLATE_ID,
   bossExcludeDeletedBuiltInIds: new Set(),
@@ -1195,6 +1195,7 @@ const state = {
   },
   apiRequestInflight: new Map(),
   authGateActive: false,
+  authStatusTimerId: null,
   logs: [],
   journal: {
     currentSource: "bosses",
@@ -1254,6 +1255,7 @@ function updateInitialLoadProgress(progress, status, detail = "") {
 }
 
 function finishInitialLoad() {
+  if (state.authGateActive) return;
   updateInitialLoadProgress(100, "Готово", "Основные данные загружены. Остальное обновляется в фоне.");
 
   revealApplicationShell();
@@ -1589,7 +1591,7 @@ function setPageLoadState(key, status, patch = {}) {
 
 async function ensurePageLoaded(key, options = {}) {
   const definition = PAGE_LOAD_DEFINITIONS[key];
-  if (!definition || (!state.pageLoadingEnabled && !options.allowBeforeReady)) {
+  if (!definition || state.authGateActive || (!state.pageLoadingEnabled && !options.allowBeforeReady)) {
     return null;
   }
   const entry = getPageLoadEntry(key);
@@ -3336,6 +3338,9 @@ function formatBossModeShortLabel(mode) {
   if (modeKey === "odin") {
     return "О";
   }
+  if (modeKey === "brigade") {
+    return "БР";
+  }
 
   const label = formatBossModeLabel(mode);
   return label ? label.slice(0, 1).toUpperCase() : "?";
@@ -4937,6 +4942,8 @@ function getAuthReasonLabel(reason) {
       return "токен доступа истёк, но доступно обновление";
     case "refresh-failed":
       return "не удалось обновить сессию — войдите заново";
+    case "game-auth-rejected":
+      return "игровой сервер отклонил авторизацию";
     case "session-ready":
       return "сессия активна";
     default:
@@ -4996,11 +5003,26 @@ function setAuthGateControlsDisabled(disabled) {
 }
 
 function showAuthGate(payload) {
+  if (state.authGateActive) return;
   const loader = $("#initial-loader");
   const authGate = $("#auth-gate");
   const shell = $(".app-shell");
 
   state.authGateActive = true;
+  state.pageLoadingEnabled = false;
+  state.pagePrefetchGeneration += 1;
+  for (const key of ["economyPollTimerId", "headerExtrasPollTimerId", "zarubaPollTimerId", "bagsRefreshTimerId", "friendsBatchPollTimerId", "authStatusTimerId"]) {
+    if (state[key]) {
+      clearInterval(state[key]);
+      state[key] = null;
+    }
+  }
+  for (const runtime of [state.bossAuto, state.friendsAutoAccept, state.autoRun]) {
+    if (runtime && runtime.timerId) {
+      clearInterval(runtime.timerId);
+      runtime.timerId = null;
+    }
+  }
   renderAuthStatus(payload);
   document.body.classList.remove("app-loading", "app-ready", "app-load-error");
   document.body.classList.add("app-auth-required");
@@ -5053,6 +5075,9 @@ function renderAuthStatus(payload) {
     noteParts.push(`игрок ${selfUserId}`);
   }
   noteParts.push(isAuthStatusActive(payload) ? "сессия активна" : `нужен вход: ${reason}`);
+  if (auth.hasAccessToken && !auth.hasRefreshToken && !auth.hasInitData) {
+    noteParts.push("без refreshToken потребуется повторный вход после истечения токена доступа");
+  }
   if (auth.authDateUtc) {
     noteParts.push(`авторизация ${formatDate(auth.authDateUtc)}`);
   }
@@ -5382,7 +5407,7 @@ function formatUserFacingError(error) {
   if (/\b429\b|too many requests|rate.?limit|slow down/i.test(detail)) {
     return "Сервер игры временно ограничил запросы. Повторим автоматически.";
   }
-  if (/missing accesstoken|cannot refresh|refresh token|unauthori[sz]ed|token.*expired/i.test(detail)) {
+  if (/\b401\b|missing accesstoken|cannot refresh|refresh token|unauthori[sz]ed|token.*expired/i.test(detail)) {
     return "Игровая сессия истекла. Войди снова по InitData.";
   }
   if (/aborterror|timed?\s*out|timeout/i.test(detail)) {
@@ -5415,6 +5440,11 @@ function appendDiagnosticError(source, error) {
 }
 
 async function apiRequest(method, url, payload, requestOptions = {}) {
+  if (state.authGateActive && !/^\/api\/(?:auth\/|meta$|system\/)/.test(url)) {
+    const error = new Error("Игровая сессия истекла. Войди снова.");
+    error.code = "AUTH_REQUIRED";
+    throw error;
+  }
   const requestKey = method === "GET" && payload === undefined ? `${method} ${url}` : null;
   if (requestKey && state.apiRequestInflight.has(requestKey)) {
     return state.apiRequestInflight.get(requestKey);
@@ -5445,7 +5475,17 @@ async function apiRequest(method, url, payload, requestOptions = {}) {
 
       if (!response.ok || !data.ok) {
         const message = data && data.error ? data.error : `HTTP ${response.status}`;
-        throw new Error(message);
+        const error = new Error(message);
+        if (response.status === 401 && data && data.code === "AUTH_REQUIRED") {
+          error.code = "AUTH_REQUIRED";
+          showAuthGate(data.data || { reason: "game-auth-rejected", auth: { isActive: false, requiresLogin: true } });
+        } else if (response.status === 409 && data && data.code === "AUTH_SESSION_CHANGED") {
+          if (!state.authSessionReloadScheduled) {
+            state.authSessionReloadScheduled = true;
+            window.setTimeout(() => window.location.reload(), 100);
+          }
+        }
+        throw error;
       }
 
       return data.data;
@@ -7908,12 +7948,7 @@ function populateBossSelect() {
     })
     .map((boss) => ({
       value: String(boss.id),
-      label: (() => {
-        const hpLabel = buildBossSelectHpLabel(boss);
-        return hpLabel
-          ? `#${boss.id} ${boss.title} [${hpLabel}]`
-          : `#${boss.id} ${boss.title}`;
-      })(),
+      label: boss.title || `Босс #${boss.id}`,
     }));
 
   if (!syncSelectOptions(select, options)) {
@@ -8158,6 +8193,8 @@ function updateBossComboInlineButtonState(candidate = getSelectedBossCandidate()
   const comboSelect = $("#boss-combo-mode");
   const hasComboModes = comboModes.length > 0;
   const comboField = comboSelect ? comboSelect.closest(".boss-combo-field") : null;
+  const useComboField = $("#boss-use-combo")?.closest("label");
+  if (useComboField) useComboField.hidden = !hasComboModes;
   const soloField = $("#boss-auto-kill-solo-field");
   if (soloField) soloField.hidden = !isSoloBossMode($("#boss-mode")?.value || candidate?.selectedMode);
   const dialogButton = $("#boss-combo-open-btn");
@@ -8508,9 +8545,9 @@ function getBossAutoQueueCandidates() {
 
 function readBossSmartQueueCollectionPreference() {
   try {
-    return readAccountStorage(BOSS_SMART_QUEUE_COLLECTION_STORAGE_KEY) === "true";
+    return readAccountStorage(BOSS_SMART_QUEUE_COLLECTION_STORAGE_KEY) !== "false";
   } catch (_error) {
-    return false;
+    return true;
   }
 }
 
@@ -9087,12 +9124,13 @@ function collectBossExcludeCheckboxes() {
 function getBossRunQueueSelectedIds(items = getBossCatalogItems()) {
   const checkboxes = collectBossExcludeCheckboxes();
   if (checkboxes.length > 0) {
-    const selectedIds = new Set(
-      checkboxes
-        .filter((input) => input.checked)
-        .map((input) => Number(input.value || 0))
-        .filter((bossId) => Number.isFinite(bossId) && bossId > 0),
-    );
+    const selectedIds = new Set(state.bossRunQueueSelectedIds instanceof Set ? state.bossRunQueueSelectedIds : []);
+    for (const input of checkboxes) {
+      const bossId = Number(input.value || 0);
+      if (!Number.isFinite(bossId) || bossId <= 0) continue;
+      if (input.checked) selectedIds.add(bossId);
+      else selectedIds.delete(bossId);
+    }
     state.bossRunQueueSelectedIds = selectedIds;
     state.bossRunQueueLegacyExcludedIds = null;
     return new Set(selectedIds);
@@ -9182,14 +9220,14 @@ function formatBossExcludeMeta(item) {
   return parts.join(" | ");
 }
 
-function renderBossExcludeModeSelect(item, bossId, modeOverrides = state.bossRunQueueModeOverrides, isSelected = true) {
+function renderBossExcludeModeSelect(item, bossId, modeOverrides = state.bossRunQueueModeOverrides, isSelected = true, normalized = false) {
   const modes = Array.isArray(item && item.availableModes)
     ? [...new Set(item.availableModes.map((mode) => String(mode || "").trim()).filter(Boolean))]
     : [];
   if (modes.length === 0) {
     return `<span class="muted">-</span>`;
   }
-  const overrides = normalizeBossRunQueueModeOverrides(modeOverrides);
+  const overrides = normalized ? modeOverrides : normalizeBossRunQueueModeOverrides(modeOverrides);
   const selectedMode = overrides[String(bossId)] || AUTO_BOSS_QUEUE_MODE;
   return `
     <select
@@ -9230,12 +9268,41 @@ function formatBossAutoQueueRuleSummary(rule) {
   return `Комбо: ${combo} · ${rule.autoKillSolo ? "автоубийство" : "без автоубийства"}`;
 }
 
+// Keep unchanged rows (and their decoded images/native controls) during polling
+// and reopening. A focused control must also survive background updates.
+function syncBossExcludeRows(list, rows) {
+  const existing = new Map([...list.children].map((node) => [node.dataset.bossExcludeKey, node]));
+  let cursor = list.firstElementChild;
+  let template;
+  for (const { key, html } of rows) {
+    let node = existing.get(key);
+    existing.delete(key);
+    if (!node || (node.bossExcludeMarkup !== html && !node.contains(document.activeElement))) {
+      template ||= document.createElement("template");
+      template.innerHTML = html.trim();
+      const replacement = template.content.firstElementChild;
+      replacement.dataset.bossExcludeKey = key;
+      replacement.bossExcludeMarkup = html;
+      if (node) {
+        if (cursor === node) cursor = replacement;
+        node.replaceWith(replacement);
+      }
+      node = replacement;
+      bindBossAvatarFallbacks(node);
+    }
+    if (node !== cursor) list.insertBefore(node, cursor);
+    cursor = node.nextElementSibling;
+  }
+  for (const node of existing.values()) node.remove();
+}
+
 function renderBossRunQueueExcludeList(options = {}) {
   const list = $("#boss-run-queue-exclude-list");
   if (!list) {
     return;
   }
 
+  const captureInitialSelection = !(state.bossRunQueueSelectedIds instanceof Set);
   const selectedIds = options.selectedIds instanceof Set
     ? options.selectedIds
     : getBossRunQueueSelectedIds();
@@ -9247,47 +9314,58 @@ function renderBossRunQueueExcludeList(options = {}) {
   if (selectedIds !== null) {
     state.bossRunQueueLegacyExcludedIds = null;
   }
-  const sections = buildBossExcludeSections();
+  const search = String($("#boss-auto-participant-search")?.value || "").trim().toLocaleLowerCase("ru");
+  const category = String($("#boss-auto-participant-category")?.value || "");
+  const sections = buildBossExcludeSections().map((section) => ({
+    ...section,
+    items: section.items.filter((item) => (!category || String(item.categoryId) === category)
+      && (!search || String(item.title || "").toLocaleLowerCase("ru").includes(search))),
+  })).filter((section) => section.items.length > 0);
   if (sections.length === 0) {
-    list.innerHTML = `<div class="boss-exclude-empty">Каталог боссов ещё не загружен.</div>`;
+    syncBossExcludeRows(list, [{ key: "empty", html: `<div class="boss-exclude-empty">${search || category ? "Боссы не найдены." : "Каталог боссов ещё не загружен."}</div>` }]);
     updateBossRunQueueExcludeSummary(selectedIds, modeOverrides);
     return;
   }
 
-  const openRules = new Set([...list.querySelectorAll("details[data-boss-rules][open]")]
-    .map((node) => Number(node.dataset.bossRules)));
-  list.innerHTML = sections.flatMap((section) => [
-    `<div class="boss-exclude-section">${escapeHtml(section.label)}</div>`,
+  const rows = sections.flatMap((section) => [
+    { key: `section:${section.label}`, html: `<div class="boss-exclude-section">${escapeHtml(section.label)}</div>` },
     ...section.items.map((item) => {
       const bossId = Number(item && item.id || 0);
       const checked = selectedIds && selectedIds.has(bossId) ? " checked" : "";
       const meta = formatBossExcludeMeta(item);
       const rule = resolveBossAutoQueueRule(bossId);
-      return `
+      const comboModes = resolveBossComboModes(item);
+      const hasSoloMode = (item.availableModes || []).some(isSoloBossMode);
+      return { key: `boss:${bossId}`, html: `
         <div class="boss-exclude-item">
           <label class="boss-exclude-check">
             <input class="js-boss-run-exclude" type="checkbox" value="${escapeHtml(String(bossId))}"${checked}>
+            ${renderBossAvatar(item)}
             <span>
-              <span class="boss-exclude-title">${escapeHtml(`#${bossId} ${item.title || ""}`.trim())}</span>
+              <span class="boss-exclude-title">${escapeHtml(item.title || `Босс #${bossId}`)}</span>
               ${meta ? `<span class="boss-exclude-meta">${escapeHtml(meta)}</span>` : ""}
             </span>
           </label>
-          ${renderBossExcludeModeSelect(item, bossId, modeOverrides, Boolean(selectedIds && selectedIds.has(bossId)))}
-          <details class="boss-exclude-rules" data-boss-rules="${bossId}"${openRules.has(bossId) ? " open" : ""}>
-            <summary aria-label="Правила боя: ${escapeHtml(item.title || String(bossId))}">${escapeHtml(formatBossAutoQueueRuleSummary(rule))}</summary>
+          <div class="boss-auto-mode-choice">${renderBossExcludeModeSelect(item, bossId, modeOverrides, Boolean(selectedIds && selectedIds.has(bossId)), true)}<div class="boss-auto-mode-preview" data-boss-id="${bossId}" data-kind="battle">${renderBossAutoModePreview(item, modeOverrides[String(bossId)] || AUTO_BOSS_QUEUE_MODE, "battle")}</div></div>
+          ${comboModes.length || hasSoloMode ? `<div class="boss-exclude-rules" data-boss-rules="${bossId}">
             <div class="boss-exclude-rules-body">
-            <label class="field"><span>Комбо</span><select class="boss-exclude-mode js-boss-exclude-combo" data-boss-id="${bossId}">
-              ${[["auto", "Автоматически — по сохранённому"], ["none", "Не пробивать"], ["pacansky", "Пацанское"], ["blotnoy", "Блатное"], ["avtoritetny", "Авторитетное"], ["vorovskoy", "Воровское"]].map(([value, label]) => `<option value="${value}"${rule.combo === value ? " selected" : ""}>${label}</option>`).join("")}
-            </select></label>
-            <label class="toggle"><input class="js-boss-exclude-solo" data-boss-id="${bossId}" type="checkbox"${rule.autoKillSolo ? " checked" : ""}><span>Убивать «в одного» автоматически</span></label>
+            ${comboModes.length ? `<label class="field boss-exclude-combo-choice"><span>Комбо</span><div class="boss-auto-mode-choice"><select class="boss-exclude-mode js-boss-exclude-combo" data-boss-id="${bossId}">
+              ${[["auto", "Автоматически"], ["none", "Не пробивать"], ...comboModes.map((mode) => [mode, formatComboModeLabel(mode)])].map(([value, label]) => `<option value="${value}"${rule.combo === value ? " selected" : ""}>${label}</option>`).join("")}
+            </select><div class="boss-auto-mode-preview" data-boss-id="${bossId}" data-kind="combo">${renderBossAutoModePreview(item, rule.combo, "combo")}</div></div></label>
+            ` : ""}${hasSoloMode ? `<label class="toggle"><input class="js-boss-exclude-solo" data-boss-id="${bossId}" type="checkbox"${rule.autoKillSolo ? " checked" : ""}><span>Убивать «в одного» автоматически</span></label>` : ""}
             </div>
-          </details>
+          </div>` : ""}
         </div>
-      `;
+      ` };
     }),
-  ]).join("");
+  ]);
+  syncBossExcludeRows(list, rows);
+  refreshBossAutoModePreviews();
 
   updateBossRunQueueExcludeSummary(selectedIds, modeOverrides);
+  if (captureInitialSelection && selectedIds !== null) {
+    persistBossQueueSettings();
+  }
 }
 
 function setBossRunQueueSelectedIds(selectedIds, options = {}) {
@@ -9446,7 +9524,7 @@ function getCandidateQueueModeBundle(candidate, preferredMode, preferredComboMod
     ...availableModes,
   ]
     .map((mode) => normalizeBossComboMode(mode))
-    .filter(Boolean);
+    .filter((mode) => mode && (mode !== "brigade" || normalizeBossComboMode(preferredMode) === "brigade"));
 
   let selectedMode = "";
   for (const modeKey of [...new Set(modePreferences)]) {
@@ -9630,10 +9708,10 @@ function getBossSmartQueueMissingBattleModes(candidate, rewards) {
     })
     .filter((item) => (
       normalizeBossComboMode(item.mode) !== SOLO_BOSS_MODE
+      && normalizeBossComboMode(item.mode) !== "brigade"
       &&
       item.missingCount > 0
       && Number.isFinite(item.hp)
-      && item.hp <= SMART_BOSS_QUEUE_COLLECTION_HP_LIMIT
     ))
     .sort((left, right) => {
       const leftPriority = left.priority >= 0 ? left.priority : Number.MAX_SAFE_INTEGER;
@@ -10180,22 +10258,10 @@ function buildBossAutoQueuePlan(options = {}) {
     return true;
   };
 
-  const getPreferredQueueMode = (candidate) => {
-    const bossId = Number(candidate && candidate.id || 0);
-    if (smartCollectionEnabled && Number.isFinite(bossId) && bossId > 0) {
-      const modes = smartModesByBossId.get(bossId) || [];
-      if (modes[0]) {
-        return modes[0].mode;
-      }
-    }
-    if (Number.isFinite(bossId) && bossId > 0 && modeOverrides.has(bossId)) {
-      return modeOverrides.get(bossId);
-    }
-    if (smartCollectionEnabled) {
-      return DEFAULT_BOSS_MODE;
-    }
-    return null;
-  };
+  const getPreferredQueueMode = (candidate) => resolveBossAutoQueuePreferredMode(
+    modeOverrides.get(Number(candidate.id)), smartCollectionEnabled,
+    smartModesByBossId.get(Number(candidate.id)) || [],
+  );
 
   const sortAttackableCandidates = (left, right) => {
     const leftPreferred = getPreferredQueueMode(left);
@@ -10277,9 +10343,7 @@ function buildBossAutoQueuePlan(options = {}) {
 
     let entry = withBossRunQueueHitTypes({
       bossId,
-      // An explicit Auto override must stay automatic in the queue. Resolving it to
-      // the default battle mode here makes a saved combo look like a battle-mode choice.
-      mode: normalizeBossComboMode(preferredMode) === AUTO_BOSS_QUEUE_MODE ? null : modeBundle.mode,
+      mode: modeBundle.mode,
       comboMode: modeBundle.comboMode || "",
       label: `#${bossId} ${candidate.title || ""}`.trim(),
       origin: "auto",
@@ -10358,10 +10422,49 @@ function buildBossAutoQueuePlan(options = {}) {
   };
 }
 
+function resolveBossAutoQueuePreferredMode(override, smartEnabled, missingModes = []) {
+  if (override && override !== AUTO_BOSS_QUEUE_MODE) return override;
+  if (smartEnabled && missingModes[0]) return missingModes[0].mode;
+  return override || (smartEnabled ? DEFAULT_BOSS_MODE : null);
+}
+
+function renderBossAutoModePreview(candidate, requestedMode, kind) {
+  let bundle;
+  if (kind === "combo") {
+    if (requestedMode === "none") return '<small>Не пробивать</small>';
+    const preferred = requestedMode === AUTO_BOSS_QUEUE_MODE
+      ? getPreferredBossComboTemplateMode(candidate) : requestedMode;
+    bundle = getCandidateQueueModeBundle(candidate, null, preferred);
+  } else {
+    const smart = isBossSmartQueueCollectionEnabled();
+    const missing = smart ? getBossSmartQueueMissingBattleModes(candidate, state.bossDashboard?.rewards) : [];
+    const preferred = resolveBossAutoQueuePreferredMode(requestedMode, smart, missing);
+    bundle = getCandidateQueueModeBundle(candidate, preferred, null);
+  }
+  const mode = kind === "combo" ? bundle?.comboMode : bundle?.mode;
+  if (!mode) return '<small>Режим недоступен</small>';
+  const prefix = requestedMode === AUTO_BOSS_QUEUE_MODE ? "→ " : "";
+  return `<small>${prefix}${escapeHtml(formatBossModeLabel(mode))}</small>${renderBossQueueRewardCounter(candidate.id, kind, mode)}`;
+}
+
+function refreshBossAutoModePreviews() {
+  const list = $("#boss-run-queue-exclude-list");
+  if (!list) return;
+  const candidates = getBossQueueCandidateMap();
+  for (const node of list.querySelectorAll(".boss-auto-mode-preview")) {
+    const candidate = candidates.get(Number(node.dataset.bossId));
+    if (!candidate) continue;
+    const select = node.parentElement.querySelector("select");
+    const html = renderBossAutoModePreview(candidate, select?.value || AUTO_BOSS_QUEUE_MODE, node.dataset.kind);
+    if (node.innerHTML !== html) node.innerHTML = html;
+  }
+}
+
 function buildBossRunQueueKeyProjection(
   queueEntries = state.bossRunQueue,
   candidates = getBossCatalogItems(),
   actions = state.bossDashboard && Array.isArray(state.bossDashboard.actions) ? state.bossDashboard.actions : [],
+  options = {},
 ) {
   const candidateList = Array.isArray(candidates) ? candidates : [];
   const candidateMap = new Map(
@@ -10403,6 +10506,9 @@ function buildBossRunQueueKeyProjection(
     if (!hasEnoughKeys) {
       return;
     }
+    if (options.assumeVictory && (isBossCandidateDailyLimitReached(candidate) || !canPlanBossCandidateWithKeys(candidate))) {
+      return;
+    }
 
     if (!bypassed && requiredKeys > 0 && keyBudgetBossId !== null) {
       budgets.set(keyBudgetBossId, Math.max(0, availableKeys - requiredKeys));
@@ -10411,7 +10517,9 @@ function buildBossRunQueueKeyProjection(
       budgets,
       rewardTargetsBySource,
       bossId,
-      getBossQueueProjectedRewardKeys(candidate, entry, actions),
+      getBossQueueProjectedRewardKeys(candidate, entry, actions, {
+        assumeVictory: options.assumeVictory === true && entry.zarubaObjective !== "damage" && entry.objective !== "damage",
+      }),
     );
   });
 
@@ -10542,6 +10650,7 @@ function getSelectedBossCandidate() {
 }
 
 function updateBossSelectedKeyControls(candidate = getSelectedBossCandidate()) {
+  renderBossManualPreview(candidate);
   const button = $("#boss-buy-selected-key-btn");
   const note = $("#boss-selected-key-note");
   if (!button || !note) {
@@ -10573,15 +10682,72 @@ function updateBossSelectedKeyControls(candidate = getSelectedBossCandidate()) {
   note.textContent = `Selected: #${candidate.id} ${candidate.title}. ${formatBossKeyRequirement(candidate)}`;
 }
 
+function renderBossManualPreview(candidate = getSelectedBossCandidate()) {
+  const target = $("#boss-manual-preview");
+  if (!target) return;
+  if (!candidate) {
+    target.innerHTML = '<span class="muted">В этой категории нет боссов. Выберите другую категорию.</span>';
+    return;
+  }
+  const bundle = getCandidateQueueModeBundle(candidate, $("#boss-mode")?.value, $("#boss-combo-mode")?.value);
+  const hp = bundle ? resolveBossModeHp(candidate.baseHp, bundle.mode) : null;
+  target.innerHTML = `${renderBossAvatar(candidate)}<div><strong>${escapeHtml(candidate.title || `Босс #${candidate.id}`)}</strong><small>${hp !== null ? `${escapeHtml(formatBossCompactNumber(hp))} HP · ` : ""}${escapeHtml(bundle ? formatBossModeLabel(bundle.mode) : "Режим недоступен")}</small></div>`;
+  bindBossAvatarFallbacks(target);
+}
+
+function getBossRunQueueDisplayBundle(item, candidate) {
+  const bundle = getCandidateQueueModeBundle(candidate, item && item.mode, item && item.comboMode);
+  return bundle || { mode: item && item.mode || "", comboMode: item && item.comboMode || "" };
+}
+
+function renderBossQueueRewardCounter(bossId, kind, modeKey) {
+  const mode = getBossRewardMode(bossId, kind, modeKey);
+  const label = kind === "combo" ? "Комбо" : "Бой";
+  const total = Number(mode && mode.total || 0);
+  if (total <= 0) {
+    return `<span class="boss-queue-reward-counter is-empty" title="Для режима нет наград"><small>${label}</small><strong>—</strong></span>`;
+  }
+  const collected = Math.max(0, Number(mode.collected || 0));
+  const tooltip = buildBossCollectionTooltip(mode, getBossCollectionModeLabel(kind, modeKey));
+  return `<span class="boss-queue-reward-counter ${collected >= total ? "is-complete" : "is-missing"}" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}"><small>${label}</small><strong>${collected}/${total}</strong></span>`;
+}
+
+function getBossQueueComboCost(item, comboMode) {
+  if (item && item.skipCombo === true) return null;
+  const template = getBossComboTemplate(item && item.bossId, comboMode);
+  if (!template || !Array.isArray(template.sequence) || template.sequence.length === 0) return null;
+  const counts = new Map();
+  for (const action of template.sequence) {
+    if (!BOSS_COMBO_ACTION_KEYS.has(action)) return null;
+    counts.set(action, (counts.get(action) || 0) + 1);
+  }
+  const weaponCounts = state.bossDashboard?.activeSession?.weaponStatsEffective?.counts || {};
+  const actions = state.bossDashboard?.actions || [];
+  let cost = 0;
+  for (const [action, count] of counts) {
+    if (BOSS_MELEE_ACTION_KEYS.has(action)) {
+      cost += Math.max(0, count - 1) * BOSS_FIXED_PRICES.restoreMelee;
+      continue;
+    }
+    const stock = actions.find((item) => item.key === action)?.count
+      ?? weaponCounts[action] ?? state.economy?.weapons?.[action]?.count;
+    if (stock === null || stock === undefined || !Number.isFinite(Number(stock))) return null;
+    const missing = Math.max(0, count - Math.max(0, Math.floor(Number(stock))));
+    cost += missing * (BOSS_FIXED_PRICES[action] || 0);
+  }
+  const candidate = getBossQueueCandidateMap().get(Number(item && item.bossId));
+  const rewardRubles = Math.max(0, Number(candidate?.comboRewardRubles?.[comboMode]) || 0);
+  return cost - rewardRubles;
+}
+
 function renderBossRunQueueModeSelect(item, candidate, index) {
   const options = Array.isArray(candidate && candidate.availableModes) ? candidate.availableModes : [];
   if (options.length === 0) {
     return `<span class="muted">-</span>`;
   }
-  const selectedValue = item && item.mode ? String(item.mode) : "";
+  const selectedValue = String(getBossRunQueueDisplayBundle(item, candidate).mode);
   return `
-    <select class="queue-inline-select js-boss-run-mode" data-index="${escapeHtml(String(index))}">
-      <option value=""${selectedValue ? "" : " selected"}>Автоматически</option>
+    <select aria-label="Режим боя ${escapeHtml(candidate.title || item.label || "босса")}" class="queue-inline-select js-boss-run-mode" data-index="${escapeHtml(String(index))}">
       ${options.map((mode) => `
         <option value="${escapeHtml(String(mode))}" ${String(mode) === selectedValue ? "selected" : ""}>
           ${escapeHtml(formatBossModeLabel(mode))}
@@ -10594,30 +10760,31 @@ function renderBossRunQueueModeSelect(item, candidate, index) {
 function renderBossRunQueueComboSelect(item, candidate, index) {
   const comboModes = resolveBossComboModes(candidate);
   if (comboModes.length === 0) {
-    return `<span class="muted">-</span>`;
+    return `<span class="boss-queue-no-combo">Комбо нет</span>`;
   }
-  const selectedComboMode = item && item.comboMode ? String(item.comboMode) : String(comboModes[0] || "");
-  const marker = selectedComboMode
-    ? renderBossComboModeMarks([selectedComboMode], item.bossId)
-    : `<span class="muted">template?</span>`;
+  const selectedComboMode = String(getBossRunQueueDisplayBundle(item, candidate).comboMode);
+  const template = getBossComboTemplate(item.bossId, selectedComboMode);
+  const cost = getBossQueueComboCost(item, selectedComboMode);
   return `
-    <div class="queue-inline-stack">
-      <select aria-label="Режим комбо" class="queue-inline-select js-boss-run-combo" data-index="${escapeHtml(String(index))}">
+    <label class="queue-field"><span>Комбо</span>
+      <select aria-label="Режим комбо ${escapeHtml(candidate.title || item.label || "босса")}" class="queue-inline-select js-boss-run-combo" data-index="${escapeHtml(String(index))}">
         ${comboModes.map((mode) => `
           <option value="${escapeHtml(String(mode))}" ${String(mode) === selectedComboMode ? "selected" : ""}>
             ${escapeHtml(formatComboModeLabel(mode))}
           </option>
         `).join("")}
       </select>
-      ${marker}
+    </label>
+      ${renderBossQueueRewardCounter(item.bossId, "combo", selectedComboMode)}
       <label class="queue-toggle"><input type="checkbox" class="js-boss-run-use-combo" data-index="${index}" ${item.skipCombo === true ? "" : "checked"}><span>Пробивать комбо, если вбито</span></label>
-    </div>
+      <button type="button" class="text-button js-boss-run-edit-combo" data-index="${index}" title="${template?.automatic ? "Комбо загружено автоматически" : template ? "Сохранённое комбо" : "Введите шаблон комбо"}">${template ? "Изменить комбо" : "Вбить комбо"}</button>
+      ${cost !== null ? `<small class="boss-queue-combo-cost" title="Откаты повторных обычных ударов + докупка недостающего оружия по текущему запасу − рубли за комбо. Первые обычные удары считаются готовыми.">${cost < 0 ? "Доход комбо" : "Расход комбо"}: ≈ ${escapeHtml(formatNumber(Math.abs(cost)))} ₽</small>` : ""}
   `;
 }
 
 function renderBossRunQueueBossCell(item, candidate) {
-  const label = item && item.label ? item.label : `#${item && item.bossId ? item.bossId : "-"}`;
-  const mode = item && item.mode ? item.mode : candidate && candidate.selectedMode ? candidate.selectedMode : null;
+  const label = candidate && candidate.title || item && item.label || `Босс #${item && item.bossId ? item.bossId : "-"}`;
+  const mode = getBossRunQueueDisplayBundle(item, candidate).mode;
   const hp = candidate ? resolveBossModeHp(candidate.baseHp, mode) : null;
   const hitTypes = normalizeBossRunQueueHitTypes(item && item.hitTypes);
   const liveZarubaTask = getZarubaBossTaskForQueueEntry(item);
@@ -10673,18 +10840,19 @@ function renderBossRunQueueBossCell(item, candidate) {
   `;
 }
 
-function renderBossRunQueue() {
+function renderBossRunQueue(options = {}) {
   const target = $("#boss-run-queue-body");
   if (!target) {
     return;
   }
+  refreshBossAutoModePreviews();
   const map = getBossQueueCandidateMap();
   const autoPlan = buildBossAutoQueuePlan();
   const selectedIds = autoPlan.selectedIds;
-  const keyProjection = buildBossRunQueueKeyProjection(state.bossRunQueue, getBossCatalogItems());
+  const keyProjection = buildBossRunQueueKeyProjection(state.bossRunQueue, getBossCatalogItems(), state.bossDashboard?.actions || [], { assumeVictory: true });
   const totalQueuedHp = state.bossRunQueue.reduce((sum, item) => {
     const candidate = map.get(Number(item && item.bossId));
-    const mode = item && item.mode ? item.mode : candidate && candidate.selectedMode ? candidate.selectedMode : null;
+    const mode = getBossRunQueueDisplayBundle(item, candidate).mode;
     const hp = candidate ? resolveBossModeHp(candidate.baseHp, mode) : null;
     return sum + (Number.isFinite(hp) ? hp : 0);
   }, 0);
@@ -10698,11 +10866,7 @@ function renderBossRunQueue() {
         ? `#${candidate.id} ${candidate.title}`
         : `#${item && item.bossId ? item.bossId : index + 1}`;
     const queueItemId = item && item.queueItemId ? String(item.queueItemId) : "";
-    const effectiveMode = item && item.mode
-      ? item.mode
-      : candidate && candidate.selectedMode
-        ? candidate.selectedMode
-        : null;
+    const effectiveMode = getBossRunQueueDisplayBundle(item, candidate).mode;
     const soloKillControl = isSoloBossMode(effectiveMode)
       ? `<div class="queue-field queue-solo-kill-field">
           <span>После запуска</span>
@@ -10722,7 +10886,7 @@ function renderBossRunQueue() {
       : candidate
       ? candidate.canStart
         ? plannedKeys && plannedKeys.hasEnoughKeys
-          ? buildBadge(plannedKeys.planned ? "Ключи появятся по плану" : "Можно запускать", "success")
+          ? buildBadge(plannedKeys.planned ? `Ждёт ключи от ${map.get(Number(candidate.keySourceBossId))?.title || "предыдущего босса"}` : "Можно запускать", "success")
           : buildBadge(
             `Не хватает ключей: ${formatNumber(
               plannedKeys && plannedKeys.keysMissing !== null
@@ -10752,21 +10916,15 @@ function renderBossRunQueue() {
             <strong>${escapeHtml(index + 1)}</strong>
           </div>
           <div class="boss-run-queue-main">
-            <div class="boss-run-queue-title">${renderBossRunQueueBossCell(item, candidate)}</div>
+            <div class="boss-run-queue-head">${candidate ? renderBossAvatar(candidate) : ""}<div class="boss-run-queue-title">${renderBossRunQueueBossCell(item, candidate)}</div><div class="boss-run-queue-status">${status}</div></div>
             <div class="boss-run-queue-controls">
               <label class="queue-field">
-                <span>Режим</span>
+                <span>Бой</span>
                 ${renderBossRunQueueModeSelect(item, candidate, index)}
               </label>
-              <div class="queue-field">
-                <span>Комбо</span>
-                ${renderBossRunQueueComboSelect(item, candidate, index)}
-              </div>
+              ${renderBossQueueRewardCounter(item.bossId, "battle", effectiveMode)}
+              ${renderBossRunQueueComboSelect(item, candidate, index)}
               ${soloKillControl}
-              <div class="queue-field queue-status-field">
-                <span>Статус</span>
-                ${status}
-              </div>
             </div>
           </div>
           <div class="boss-queue-row-actions">
@@ -10783,17 +10941,38 @@ function renderBossRunQueue() {
         </article>
     `;
   }).join("");
+  const activeSelect = options.userEdit && hasFocusedSelect(target) ? document.activeElement : null;
+  const focusSelector = activeSelect
+    ? `.${activeSelect.matches(".js-boss-run-mode") ? "js-boss-run-mode" : "js-boss-run-combo"}[data-index="${Number(activeSelect.dataset.index)}"]`
+    : null;
+  // A committed selection must update its HP and counters immediately. Preserve
+  // keyboard focus on the replacement; background polling still leaves selects alone.
+  activeSelect?.blur();
   replaceHtmlUnlessSelectFocused(target, queueRows || `
     <div class="boss-run-queue-empty" role="listitem">
       Очередь пуста — добавьте выбранного босса или соберите доступных автоматически.
     </div>
   `);
+  if (focusSelector) target.querySelector(focusSelector)?.focus();
+  bindBossAvatarFallbacks(target);
 
   renderStatGrid($("#boss-run-queue-summary"), [
     { label: "В очереди", value: formatNumber(state.bossRunQueue.length) },
     { label: "Суммарное HP", value: formatBossCompactNumber(totalQueuedHp) },
-    { label: "Доступно для автосбора", value: formatNumber(autoPlan.entries.length) },
+    { label: "Выбрано для автоформирования", value: formatNumber(selectedIds.size) },
   ]);
+  const settingsSummary = $("#boss-auto-queue-settings-summary");
+  if (settingsSummary) settingsSummary.textContent = `Выбрано для автоформирования: ${formatNumber(selectedIds.size)} · подбор по коллекции: ${autoPlan.smartCollectionEnabled ? "вкл." : "выкл."}`;
+  const nextPreview = $("#boss-run-next-preview");
+  if (nextPreview) {
+    const head = state.bossRunQueue[0];
+    const candidate = head ? map.get(Number(head.bossId)) : null;
+    const bundle = getBossRunQueueDisplayBundle(head, candidate);
+    nextPreview.innerHTML = head
+      ? `${candidate ? renderBossAvatar(candidate) : ""}<div><strong>${escapeHtml(candidate?.title || head.label || `Босс #${head.bossId}`)}</strong><small>${escapeHtml(formatBossModeLabel(bundle.mode))}${candidate ? ` · ${escapeHtml(formatBossCompactNumber(resolveBossModeHp(candidate.baseHp, bundle.mode)))} HP` : ""}</small></div>`
+      : `<span class="muted">Очередь пуста</span>`;
+    bindBossAvatarFallbacks(nextPreview);
+  }
   const note = $("#boss-run-queue-note");
   if (note) {
     const modeCount = autoPlan.modeOverrides instanceof Map ? autoPlan.modeOverrides.size : 0;
@@ -10803,6 +10982,43 @@ function renderBossRunQueue() {
   }
   updateBossRunQueueExcludeSummary(selectedIds, autoPlan.modeOverrides);
   updateBossAutoStatus();
+}
+
+function setBossQueueAutoTab(tab) {
+  const selected = tab === "rules" ? "rules" : "participants";
+  document.querySelectorAll("[data-boss-auto-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.bossAutoPanel !== selected;
+  });
+  document.querySelectorAll("[data-boss-auto-tab]").forEach((button) => {
+    button.setAttribute("aria-pressed", String(button.dataset.bossAutoTab === selected));
+  });
+}
+
+function openBossQueuePanel(panel) {
+  const dialog = $(`#boss-queue-${panel}-dialog`);
+  if (!dialog) return;
+  dialog.querySelectorAll("details").forEach((details) => { details.open = true; });
+  if (panel === "auto") {
+    setBossQueueAutoTab("participants");
+    renderBossRunQueueExcludeList();
+  }
+  if (!dialog.open) dialog.showModal();
+}
+
+function handleBossQueuePanelClick(event) {
+  const opener = event.target.closest("[data-boss-queue-panel]");
+  if (opener) openBossQueuePanel(opener.dataset.bossQueuePanel);
+  const closer = event.target.closest("[data-boss-queue-close]");
+  if (closer) closer.closest("dialog")?.close();
+  const tab = event.target.closest("[data-boss-auto-tab]");
+  if (tab) setBossQueueAutoTab(tab.dataset.bossAutoTab);
+  const combo = event.target.closest(".js-boss-run-edit-combo");
+  if (combo) {
+    const item = state.bossRunQueue[Number(combo.dataset.index)];
+    const candidate = item ? getBossQueueCandidateMap().get(Number(item.bossId)) : null;
+    if (!item || !candidate) return;
+    openBossComboDialog({ preferredBossId: item.bossId, preferredMode: getBossRunQueueDisplayBundle(item, candidate).comboMode, forcePreferred: true, applyToMainSelection: false });
+  }
 }
 
 function buildBossRunQueueEntry() {
@@ -12052,7 +12268,7 @@ function buildBossFightDetailItems(context = resolveBossLiveContext()) {
       { label: "Пробито", value: formatBossComboSuccess(context.comboSuccess) },
     );
     if (context.comboCostRubles !== null) {
-      details.push({ label: "Стоимость комбо", value: `${formatNumber(context.comboCostRubles)} руб.` });
+      details.push({ label: "Расход комбо", value: `${formatNumber(context.comboCostRubles)} руб.` });
     }
   }
 
@@ -13604,6 +13820,7 @@ function applyBossWeaponDelta(weaponDelta) {
     }
     renderBossWeaponPanel(state.bossDashboard.actions);
     renderBossAttackQueue();
+    renderBossRunQueue();
   }
   return true;
 }
@@ -14985,10 +15202,15 @@ async function handleAuthStatusRefresh(options = {}) {
   try {
     const payload = await apiRequest("GET", "/api/auth/status");
     renderAuthStatus(payload);
+    if (!isAuthStatusActive(payload) && !state.authGateActive && document.body.classList.contains("app-ready")) {
+      showAuthGate(payload);
+    }
     if (state.authGateActive) {
       if (isAuthStatusActive(payload)) {
         setAuthGateMessage("Сессия активна. Загружаем панель…", "ok");
-        window.setTimeout(() => window.location.reload(), 350);
+        if (options.reloadIfRestored !== false) {
+          window.setTimeout(() => window.location.reload(), 350);
+        }
       } else {
         const reason = getAuthReasonLabel(payload.reason || (payload.auth && payload.auth.reason));
         setAuthGateMessage(`Нужен вход: ${reason}.`, "error");
@@ -15096,12 +15318,17 @@ async function handleTokenAuthLogin() {
     const payload = await apiRequest("POST", "/api/auth/login-tokens", authOptions);
     renderAuthStatus(payload);
     appendLog("Auth login", `вход по токенам, игрок ${payload && payload.auth && payload.auth.selfUserId || "—"}`);
+    const canRefresh = Boolean(payload && payload.auth && payload.auth.hasRefreshToken);
     if (state.authGateActive) {
-      setAuthGateMessage("Токены приняты. Загружаем панель…", "ok");
+      setAuthGateMessage(canRefresh
+        ? "Токены приняты. Загружаем панель…"
+        : "Вход выполнен без refreshToken. После истечения accessToken потребуется новый вход.", "ok");
     } else {
       const note = $("#auth-status-note");
       if (note) {
-        note.textContent = "Токены проверены и сохранены. Перезагружаем данные…";
+        note.textContent = canRefresh
+          ? "Токены проверены и сохранены. Перезагружаем данные…"
+          : "Вход выполнен без refreshToken. После истечения accessToken потребуется новый вход.";
         note.dataset.tone = "ok";
       }
     }
@@ -15448,7 +15675,38 @@ async function handleBossRunQueueAdd() {
     );
 }
 
+function setBossQueueBuildStatus(busy, message = "") {
+  state.bossQueueBuilding = busy;
+  for (const id of ["#boss-run-auto-build", "#boss-run-source-apply"]) {
+    const button = $(id);
+    if (!button) continue;
+    if (busy && !button.dataset.buildLabel) {
+      button.dataset.buildLabel = button.textContent;
+      button.dataset.buildDisabled = String(button.disabled);
+    }
+    button.disabled = busy || button.dataset.buildDisabled === "true";
+    button.classList.toggle("is-building", busy);
+    button.setAttribute("aria-busy", String(busy));
+    button.textContent = busy ? "Формируем очередь…" : button.dataset.buildLabel || button.textContent;
+    if (!busy) {
+      delete button.dataset.buildLabel;
+      delete button.dataset.buildDisabled;
+    }
+  }
+  for (const id of ["#boss-queue-build-status", "#boss-auto-build-status"]) {
+    const node = $(id);
+    if (!node) continue;
+    node.hidden = !message;
+    node.classList.toggle("is-building", busy);
+    node.textContent = message;
+  }
+  $("#boss-run-queue-body")?.setAttribute("aria-busy", String(busy));
+}
+
 async function handleBossRunQueueBuild() {
+  if (state.bossQueueBuilding) return;
+  let resultMessage = "Формирование отменено.";
+  setBossQueueBuildStatus(true, "Обновляем данные боссов…");
   setServerStatus("building boss queue", "busy");
   try {
     await handleBossDashboard({
@@ -15458,6 +15716,7 @@ async function handleBossRunQueueBuild() {
       syncQueue: true,
     });
     await handleZarubaDashboard({ silent: true, syncControls: false });
+    setBossQueueBuildStatus(true, "Подбираем режимы и проверяем комбо…");
     const initialPlan = buildBossAutoQueuePlan();
     await offerBossComboSetupForQueue(initialPlan.entries);
     const plan = buildBossAutoQueuePlan();
@@ -15471,6 +15730,7 @@ async function handleBossRunQueueBuild() {
         note.textContent = reason;
       }
       setServerStatus("boss queue is empty", "error");
+      resultMessage = reason;
       return;
     }
     if (!await confirmBossRunQueueSoloWarning(plan.entries)) {
@@ -15482,6 +15742,7 @@ async function handleBossRunQueueBuild() {
     markBossRunQueueEdited();
     persistBossRunQueue();
     renderBossRunQueue();
+    setBossQueueBuildStatus(true, "Сохраняем сформированную очередь…");
     await syncBossAutomationState({}, { silent: true, renderQueue: false });
     if (state.bossAuto.autoStartNext) {
       scheduleBossStartUiSync();
@@ -15491,10 +15752,15 @@ async function handleBossRunQueueBuild() {
       `queued ${formatNumber(plan.entries.length)}, selected ${formatNumber(plan.selectedIds.size)}, active ${formatNumber(plan.activeCount)}, no mode ${formatNumber(plan.noModeCount)}, smart priority ${formatNumber(plan.smartPreferredCount)}, pacansky fallback ${formatNumber(plan.smartFallbackCount)}, stopped by keys ${formatNumber(plan.keyShortageCount)}, blocked ${formatNumber(plan.blockedCount)}`,
     );
     setServerStatus("ready", "ok");
+    resultMessage = `Очередь сформирована: ${formatNumber(plan.entries.length)} боёв.`;
+    $("#boss-queue-auto-dialog")?.close?.();
   } catch (error) {
     setServerStatus("boss queue build error", "error");
     appendLog("Boss queue build failed", error.message || "error");
     appendDiagnosticError("bosses", error);
+    resultMessage = "Не удалось сформировать очередь. Подробности — в журнале.";
+  } finally {
+    setBossQueueBuildStatus(false, resultMessage);
   }
 }
 
@@ -15699,7 +15965,7 @@ async function handleBossRunQueueModeChange(event) {
   state.bossRunQueue[index] = withBossRunQueueHitTypes(item);
   markBossRunQueueEdited();
   persistBossRunQueue();
-  renderBossRunQueue();
+  renderBossRunQueue({ userEdit: true });
   await syncBossAutomationAfterQueueEdit(
     "Boss queue mode",
     { queueOperations: [{ type: "replace", from: previousItem, item: state.bossRunQueue[index] }] },
@@ -15725,7 +15991,7 @@ async function handleBossRunQueueComboChange(event) {
   });
   markBossRunQueueEdited();
   persistBossRunQueue();
-  renderBossRunQueue();
+  renderBossRunQueue({ userEdit: true });
   await syncBossAutomationAfterQueueEdit(
     "Boss queue combo",
     { queueOperations: [{ type: "replace", from: previousItem, item: state.bossRunQueue[index] }] },
@@ -20562,6 +20828,7 @@ async function loadBossRunPreset(id) {
   renderBossRunQueue();
   await syncBossAutomationState({}, { silent: true, renderQueue: false });
   appendLog("Boss queue preset loaded", preset.name);
+  $("#boss-queue-presets-dialog")?.close?.();
 }
 
 async function handleBossQueueSourceApply() {
@@ -22093,6 +22360,8 @@ async function bootstrap() {
     closeBossComboDialog();
   });
   $("#boss-run-queue-add").addEventListener("click", handleBossRunQueueAdd);
+  document.addEventListener("click", handleBossQueuePanelClick);
+  $("#boss-run-auto-build")?.addEventListener("click", handleBossRunQueueBuild);
   $("#boss-run-source-apply")?.addEventListener("click", handleBossQueueSourceApply);
   $("#boss-run-queue-clear").addEventListener("click", handleBossRunQueueClear);
   $("#boss-run-preset-save")?.addEventListener("click", handleBossRunPresetSave);
@@ -22118,6 +22387,8 @@ async function bootstrap() {
   bossRunQueueBody.addEventListener("drop", handleBossRunQueueDrop);
   bossRunQueueBody.addEventListener("dragend", clearBossRunQueueDragState);
   $("#boss-run-queue-exclude-list").addEventListener("change", handleBossRunQueueExcludeChange);
+  $("#boss-auto-participant-search")?.addEventListener("input", () => renderBossRunQueueExcludeList());
+  $("#boss-auto-participant-category")?.addEventListener("change", () => renderBossRunQueueExcludeList());
   $("#boss-run-queue-exclude-actions").addEventListener("click", handleBossRunQueueExcludeActionClick);
   $(".boss-exclude-template-row")?.addEventListener("click", handleBossRunQueueExcludeActionClick);
   $("#boss-exclude-template-select")?.addEventListener("change", handleBossExcludeTemplateSelectChange);
@@ -22243,10 +22514,12 @@ async function bootstrap() {
   updateInitialLoadProgress(38, "Загружаем показатели…", "Кошелёк и данные шапки.");
   void runStartupTask({ name: "статистика в шапке", run: () => handleHeaderExtrasRefresh() });
   await runStartupTask({ name: "экономика", run: () => handleEconomyRefresh() });
+  if (state.authGateActive) return;
   $(".hero")?.classList.remove("is-data-loading");
 
   updateInitialLoadProgress(64, "Загружаем раздел «Боссы»…", "Каталог, оружие и активный бой.");
   await ensurePageLoaded("bosses", { allowBeforeReady: true }).catch(() => null);
+  if (state.authGateActive) return;
   renderBossAutomationActivity();
   renderLog();
   finishInitialLoad();
@@ -22255,6 +22528,12 @@ async function bootstrap() {
   startZarubaSync();
   startBagsSync();
   startPagePrefetch();
+  if (state.authStatusTimerId) clearInterval(state.authStatusTimerId);
+  state.authStatusTimerId = setInterval(() => {
+    if (!state.authGateActive) {
+      void handleAuthStatusRefresh({ silent: true, showStatus: false, reloadIfRestored: false }).catch(() => null);
+    }
+  }, 60_000);
 
   const activePageFailed = getPageLoadEntry("bosses").status === "error";
   if (startupFailures.length > 0 || activePageFailed) {

@@ -1931,6 +1931,87 @@ test("combo runner buys the exact missing consumable once and retries the hit", 
   assert.equal(result.cycles[0].hits[0].purchase.ok, true);
 });
 
+test("combo runner restores a known melee cooldown before the next hit", async () => {
+  const calls = [];
+  const client = {
+    bosses: {
+      useWeapon: async () => {
+        calls.push("hit");
+        const currentHp = calls.filter((call) => call === "hit").length === 1 ? 90 : 80;
+        return { ok: true, status: 200, data: { success: true, currentHp, damage: 10 } };
+      },
+      restoreFreeHit: async () => {
+        calls.push("restore");
+        return { ok: true, status: 200, data: { success: true, spent: 3, currency: "rubles" } };
+      },
+      checkSession: async () => ({
+        ok: true,
+        status: 200,
+        data: {
+          success: true,
+          hasSession: true,
+          session: { sessionId: "test-session", bossId: 1, mode: "pacansky", currentHp: 80, baseHp: 100 },
+        },
+      }),
+    },
+  };
+  const item = { type: "punchChest", payload: { weapon: "punchChest", count: 1 } };
+  const plan = {
+    selectedBoss: { id: 1, baseHp: 100, title: "Test boss" },
+    selectedMode: "pacansky",
+    targetHp: 100,
+    startPlan: {
+      action: "reuse-active",
+      activeSession: {
+        session: { sessionId: "test-session", bossId: 1, mode: "pacansky", currentHp: 100, baseHp: 100 },
+      },
+    },
+    requests: [item, item],
+  };
+
+  const result = await __test.executeBossRunnerLoop(client, plan, {
+    claimWhenReady: false,
+    continueOnError: false,
+    fastMode: true,
+    snapshotAfterEachHit: false,
+    throttleWeaponRequests: false,
+  });
+
+  assert.deepEqual(calls, ["hit", "restore", "hit"]);
+  assert.equal(result.restore.attempted, 1);
+  assert.equal(result.restore.succeeded, 1);
+  assert.equal(result.cycles[0].hits.length, 2);
+
+  calls.length = 0;
+  const activeCooldownPlan = structuredClone(plan);
+  activeCooldownPlan.requests = [item];
+  activeCooldownPlan.startPlan.activeSession.session.meleeCooldowns = {
+    punchChest: { active: true, readyAt: new Date(Date.now() + 60_000).toISOString(), cooldownSec: 60 },
+  };
+  const activeCooldownResult = await __test.executeBossRunnerLoop(client, activeCooldownPlan, {
+    claimWhenReady: false,
+    continueOnError: false,
+    fastMode: true,
+    snapshotAfterEachHit: false,
+    throttleWeaponRequests: false,
+  });
+  assert.deepEqual(calls, ["restore", "hit"]);
+  assert.equal(activeCooldownResult.restore.succeeded, 1);
+
+  calls.length = 0;
+  activeCooldownPlan.startPlan.activeSession.session.meleeCooldowns.punchChest.readyAt =
+    new Date(Date.now() + 500).toISOString();
+  const expiringCooldownResult = await __test.executeBossRunnerLoop(client, activeCooldownPlan, {
+    claimWhenReady: false,
+    continueOnError: false,
+    fastMode: true,
+    snapshotAfterEachHit: false,
+    throttleWeaponRequests: false,
+  });
+  assert.deepEqual(calls, ["hit"]);
+  assert.equal(expiringCooldownResult.restore.attempted, 0);
+});
+
 test("automation quick chain starts only after closed settled state", () => {
   assert.equal(
     __test.shouldBossAutomationChainAfterSettle(

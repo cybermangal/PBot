@@ -123,6 +123,60 @@ test("expired access token is refreshed before the session is reported active", 
   }
 });
 
+test("access token is renewed shortly before expiry", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-proactive-"));
+  const sessionPath = path.join(directory, "session.json");
+  const originalFetch = global.fetch;
+  const nextAccessToken = makeToken(303, "access", Math.floor(Date.now() / 1000) + 900);
+  let calls = 0;
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({
+      frameUrl: "https://game.example/game",
+      game: {
+        accessToken: makeToken(303, "access", Math.floor(Date.now() / 1000) + 60),
+        refreshToken: makeToken(303, "refresh"),
+      },
+    }), "utf8");
+    global.fetch = async (url) => {
+      assert.equal(String(url), "https://game.example/api/auth/refresh");
+      calls += 1;
+      return new Response(JSON.stringify({ success: true, accessToken: nextAccessToken }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    const status = await getAuthStatus({}, sessionPath);
+    assert.equal(status.auth.isActive, true);
+    assert.equal(status.reason, "session-ready");
+    assert.equal(calls, 1);
+    assert.equal(JSON.parse(await fs.readFile(sessionPath, "utf8")).game.accessToken, nextAccessToken);
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a temporary refresh outage does not expire a still-valid access token", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-refresh-outage-"));
+  const sessionPath = path.join(directory, "session.json");
+  const originalFetch = global.fetch;
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({
+      frameUrl: "https://game.example/game",
+      game: {
+        accessToken: makeToken(303, "access", Math.floor(Date.now() / 1000) + 60),
+        refreshToken: makeToken(303, "refresh"),
+      },
+    }));
+    global.fetch = async () => { throw new Error("network unavailable"); };
+    const status = await getAuthStatus({}, sessionPath);
+    assert.equal(status.auth.isActive, true);
+    assert.equal(status.reason, "session-ready");
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("rejected refresh token requires login without repeated refresh requests", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-refresh-rejected-"));
   const sessionPath = path.join(directory, "session.json");
@@ -170,6 +224,14 @@ test("token login validates credentials, binds the user ID, and removes another 
       game: { accessToken: "old-access", refreshToken: "old-refresh" },
     }), "utf8");
     global.fetch = async (url, options = {}) => {
+      if (String(url).endsWith("/api/auth/refresh")) {
+        assert.deepEqual(JSON.parse(options.body), { refresh: refreshToken });
+        assert.equal(options.headers.Authorization, undefined);
+        return new Response(JSON.stringify({ success: true, accessToken, refreshToken }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
       assert.equal(String(url), "https://game.example/api/player/init");
       assert.equal(options.headers.Authorization, `Bearer ${accessToken}`);
       return new Response(JSON.stringify({
@@ -207,6 +269,34 @@ test("token login validates credentials, binds the user ID, and removes another 
     const switched = await switchSavedAuthAccount({ accountId: "303" }, sessionPath);
     assert.equal(switched.login.method, "tokens");
     assert.equal(switched.auth.selfUserId, "303");
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("token login rejects an invalid refresh token before saving the session", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-invalid-refresh-"));
+  const sessionPath = path.join(directory, "session.json");
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (url, options = {}) => {
+      assert.equal(String(url), "https://game.example/api/auth/refresh");
+      assert.ok(JSON.parse(options.body).refresh);
+      return new Response(JSON.stringify({ success: false, message: "invalid_token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    };
+    await assert.rejects(
+      loginByTokens({
+        accessToken: makeToken(303),
+        refreshToken: makeToken(303, "refresh"),
+        baseUrl: "https://game.example",
+      }, sessionPath),
+      /invalid_token/,
+    );
+    await assert.rejects(fs.access(sessionPath), { code: "ENOENT" });
   } finally {
     global.fetch = originalFetch;
     await fs.rm(directory, { recursive: true, force: true });
@@ -271,7 +361,8 @@ test("startup keep-alive touches every saved account and persists refreshed cred
         }), { status: 200, headers: { "content-type": "application/json" } });
       }
       assert.equal(String(url).endsWith("/api/auth/refresh"), true);
-      assert.equal(options.headers.Authorization, `Bearer ${refresh202}`);
+      assert.deepEqual(JSON.parse(options.body), { refresh: refresh202 });
+      assert.equal(options.headers.Authorization, undefined);
       return new Response(JSON.stringify({
         success: true,
         data: { accessToken: refreshedToken202, refreshToken: refresh202 },
@@ -296,6 +387,105 @@ test("startup keep-alive touches every saved account and persists refreshed cred
     assert.equal(account101.accessToken, makeToken(101));
     assert.equal(account202.nickname, "Двести второй");
     assert.equal(account202.accessToken, refreshedToken202);
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("inactive account keep-alive saves rotated refresh credentials for switching", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-rotation-"));
+  const sessionPath = path.join(directory, "session.json");
+  const registryPath = path.join(directory, "auth-accounts.json");
+  const originalFetch = global.fetch;
+  const rotatedAccess = makeToken(202, "access", Math.floor(Date.now() / 1000) + 900);
+  const rotatedRefresh = makeToken(202, "refresh", Math.floor(Date.now() / 1000) + 604800);
+  try {
+    await fs.writeFile(sessionPath, JSON.stringify({
+      frameUrl: "https://game.example/game",
+      telegram: { initDataUnsafe: { user: { id: 101 } } },
+      game: { accessToken: makeToken(101) },
+    }));
+    await fs.writeFile(registryPath, JSON.stringify({ version: 1, accounts: [
+      {
+        accountId: "202", selfUserId: "202", accessToken: makeToken(202), refreshToken: makeToken(202, "refresh"),
+        lastUsedAt: "2025-01-01T00:00:00.000Z", updatedAt: "2025-01-01T00:00:00.000Z",
+      },
+    ] }));
+    await fs.writeFile(path.join(directory, "session-2026-01-01.json"), JSON.stringify({
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      telegram: { initData: makeInitData(202) },
+      game: { accessToken: makeToken(202), refreshToken: makeToken(202, "refresh") },
+    }));
+    let refreshCalls = 0;
+    let signalRefreshStarted;
+    let releaseFirstRefresh;
+    const refreshStarted = new Promise((resolve) => { signalRefreshStarted = resolve; });
+    const firstRefreshReleased = new Promise((resolve) => { releaseFirstRefresh = resolve; });
+    global.fetch = async (url, options = {}) => {
+      if (String(url).endsWith("/api/auth/refresh")) {
+        refreshCalls += 1;
+        if (refreshCalls === 1) {
+          signalRefreshStarted();
+          await firstRefreshReleased;
+        }
+        if (refreshCalls === 2) assert.equal(JSON.parse(options.body).refresh, rotatedRefresh);
+        return new Response(JSON.stringify({ success: true, accessToken: rotatedAccess, refreshToken: rotatedRefresh }), {
+          status: 200, headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ success: true, player: { userId: 202, nickname: "Two" } }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    const maintenance = keepAliveSavedAuthAccounts(sessionPath);
+    await refreshStarted;
+    const switching = switchSavedAuthAccount({ accountId: "202" }, sessionPath);
+    releaseFirstRefresh();
+    assert.equal((await maintenance).succeeded, 1);
+    const saved = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    assert.equal(saved.accounts[0].refreshToken, rotatedRefresh);
+    assert.equal((await switching).auth.selfUserId, "202");
+    assert.equal(refreshCalls, 2);
+  } finally {
+    global.fetch = originalFetch;
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejected saved credentials are retried after the account receives new tokens", async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "pbot-auth-keep-alive-retry-"));
+  const sessionPath = path.join(directory, "session.json");
+  const registryPath = path.join(directory, "auth-accounts.json");
+  const originalFetch = global.fetch;
+  let calls = 0;
+  try {
+    await fs.writeFile(registryPath, JSON.stringify({ version: 1, accounts: [
+      { accountId: "909", selfUserId: "909", accessToken: makeToken(909), refreshToken: makeToken(909, "refresh") },
+    ] }));
+    global.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({ success: false, message: "invalid_token" }), {
+        status: 401, headers: { "content-type": "application/json" },
+      });
+    };
+    assert.equal((await keepAliveSavedAuthAccounts(sessionPath)).failed, 1);
+    assert.equal((await keepAliveSavedAuthAccounts(sessionPath)).failed, 1);
+    assert.equal(calls, 1);
+
+    const registry = JSON.parse(await fs.readFile(registryPath, "utf8"));
+    registry.accounts[0].accessToken = makeToken(909, "access", 2_100_000_000);
+    registry.accounts[0].refreshToken = makeToken(909, "refresh", 2_100_000_000);
+    await fs.writeFile(registryPath, JSON.stringify(registry));
+    global.fetch = async () => {
+      calls += 1;
+      return new Response(JSON.stringify({
+        success: true, accessToken: makeToken(909, "access", 2_200_000_000),
+        refreshToken: makeToken(909, "refresh", 2_200_000_000),
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    assert.equal((await keepAliveSavedAuthAccounts(sessionPath)).succeeded, 1);
+    assert.equal(calls, 2);
   } finally {
     global.fetch = originalFetch;
     await fs.rm(directory, { recursive: true, force: true });

@@ -32,6 +32,7 @@ const {
   getDamageReport,
   getAuthStatus,
   getSavedAuthAccounts,
+  keepAliveSavedAuthAccounts,
   getBossAutomationState,
   getBossAutomationLog,
   getEconomyStatus,
@@ -398,6 +399,17 @@ async function handleApi(request, response, url, requestShutdown) {
     const result = await switchSavedAuthAccount(await readJsonBody(request));
     await initializeAuthenticatedRuntime();
     sendJson(response, 200, { ok: true, data: result });
+    return;
+  }
+
+  const authStatus = await getAuthStatus();
+  if (!authStatus.auth || !authStatus.auth.isActive) {
+    sendJson(response, 401, {
+      ok: false,
+      code: "AUTH_REQUIRED",
+      error: "Игровая сессия истекла. Войди снова.",
+      data: authStatus,
+    });
     return;
   }
 
@@ -1042,8 +1054,10 @@ async function main() {
           error,
         });
       }
-      sendJson(response, 500, {
+      const authError = error && ["AUTH_REQUIRED", "AUTH_SESSION_CHANGED"].includes(error.code);
+      sendJson(response, error && error.code === "AUTH_REQUIRED" ? 401 : authError ? 409 : 500, {
         ok: false,
+        ...(authError ? { code: error.code } : {}),
         error: error && error.message ? error.message : "Internal server error",
       });
     }
@@ -1065,8 +1079,24 @@ async function main() {
   process.stdout.write(`UI server listening on ${appUrl}\n`);
   logEvent("ui.server.listening", { host, port, appUrl, autoOpen });
 
-  // Inactive saved accounts may be active in another instance. Do not refresh
-  // their credentials here; each instance maintains only its active session.
+  // Keep saved, inactive credentials renewable so account switching still works.
+  let authKeepAliveRunning = false;
+  const keepSavedAccountsAlive = async () => {
+    if (authKeepAliveRunning) return;
+    authKeepAliveRunning = true;
+    try {
+      await getAuthStatus();
+      await keepAliveSavedAuthAccounts();
+    } catch (error) {
+      logEvent("auth.accounts.keep_alive_error", { error });
+    } finally {
+      authKeepAliveRunning = false;
+    }
+  };
+  setTimeout(() => {
+    void keepSavedAccountsAlive();
+    setInterval(() => void keepSavedAccountsAlive(), 5 * 60_000).unref();
+  }, 60_000).unref();
   if (process.send) process.send({ type: "pbot-ready", instanceId: INSTANCE_INFO.instanceId });
 
   if (autoOpen) {
